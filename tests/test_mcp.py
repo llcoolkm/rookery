@@ -14,7 +14,8 @@ class MCPTests(unittest.TestCase):
     def setUp(self):
         self.client = Mock()
         self.client.peers.return_value = [{"name": "reviewer"}]
-        self.client.send.return_value = {"message_id": "123", "status": "queued"}
+        self.client.send.return_value = {"id": "123", "request_id": "r-123", "status": "queued_local",
+                                         "detail": "saved locally; helper will upload when connected"}
         self.server = Server(self.client)
         self.request("initialize", {"protocolVersion": "2025-06-18"})
 
@@ -29,7 +30,7 @@ class MCPTests(unittest.TestCase):
             self.assertNotIn("actor", tool["inputSchema"]["properties"])
         result = self.request("tools/call", {"name": "send", "arguments": {"to": "reviewer", "body": "review"}})
         self.client.send.assert_called_once_with(to="reviewer", body="review")
-        self.assertEqual(json.loads(result["result"]["content"][0]["text"])["status"], "queued")
+        self.assertEqual(json.loads(result["result"]["content"][0]["text"])["status"], "queued_local")
 
     def test_tool_names_are_unprefixed_and_legacy_names_stay_callable(self):
         names = {tool["name"] for tool in self.request("tools/list")["result"]["tools"]}
@@ -173,6 +174,57 @@ class MCPTests(unittest.TestCase):
         self.client.identity.return_value = 'server/codex:one'
         response = self.request('tools/call', {'name': 'status'})
         self.assertEqual(json.loads(response['result']['content'][0]['text'])['identity'], 'server/codex:one')
+
+    def call(self, name, arguments=None):
+        response = self.request("tools/call", {"name": name, "arguments": arguments or {}})
+        self.assertNotIn("error", response)
+        return json.loads(response["result"]["content"][0]["text"])
+
+    def test_send_result_is_compact_and_names_the_resolved_recipient(self):
+        record = {"id": "m1", "sender": "node/claude:me", "recipient": "node/codex:canonical", "kind": "ask",
+                  "body": "a long body", "status": "pending", "received_by_host": False,
+                  "in_reply_to": None, "expires": 1234.5}
+        self.client.send.return_value = record
+        value = self.call("send", {"to": "worker", "body": "a long body"})
+        self.assertEqual(value, {"id": "m1", "to": "node/codex:canonical", "kind": "ask", "status": "pending",
+                                 "received_by_host": False})
+        self.assertEqual(list(value)[:4], ["id", "to", "kind", "status"])
+        self.client.send.assert_called_with(to="worker", body="a long body")
+        self.assertEqual(self.call("send", {"to": "worker", "body": "b", "verbose": True}), record)
+        self.client.send.assert_called_with(to="worker", body="b")
+
+    def test_send_result_never_fabricates_fields(self):
+        queued = {"status": "queued_local", "request_id": "r1", "id": "m1",
+                  "detail": "saved locally; helper will upload when connected"}
+        self.client.send.return_value = queued
+        value = self.call("send", {"to": "worker", "body": "b"})
+        self.assertEqual(value, queued)
+        self.assertNotIn("to", value)
+        self.assertNotIn("received_by_host", value)
+        for record in ({"id": "m2", "recipient": "n/codex:x", "kind": "ask", "status": "uncertain",
+                        "received_by_host": True, "detail": "outcome unknown; inspect status"},
+                       {"id": "m3", "status": "failed", "error": "refused by recipient policy",
+                        "detail": "refused", "stale": True}):
+            self.client.send.return_value = record
+            value = self.call("send", {"to": "worker", "body": "b"})
+            expected = {("to" if k == "recipient" else k): v for k, v in record.items()}
+            self.assertEqual(value, expected)
+
+    def test_reply_result_keeps_actual_kind_and_thread_fields(self):
+        follow = {"id": "f1", "request_id": "r2", "sender": "n/claude:me", "recipient": "n/codex:peer",
+                  "kind": "ask", "body": "Follow-up", "status": "pending", "received_by_host": False,
+                  "read_at": None, "in_reply_to": "reply-1", "expires": 99.0}
+        self.client.reply.return_value = follow
+        value = self.call("reply", {"message_id": "reply-1", "body": "Follow-up"})
+        self.assertEqual(value, {"id": "f1", "to": "n/codex:peer", "kind": "ask", "status": "pending",
+                                 "request_id": "r2", "received_by_host": False, "in_reply_to": "reply-1"})
+        self.client.reply.assert_called_with(message_id="reply-1", body="Follow-up")
+        answer = dict(follow, kind="reply", reply_id="x", followup_id="y", read_at=5.0)
+        self.client.reply.return_value = answer
+        value = self.call("reply", {"message_id": "ask-1", "body": "b"})
+        self.assertEqual((value["kind"], value["reply_id"], value["followup_id"], value["read_at"]),
+                         ("reply", "x", "y", 5.0))
+        self.assertEqual(self.call("reply", {"message_id": "ask-1", "body": "b", "verbose": True}), answer)
 
     def test_provider_and_explicit_binding_are_exclusive(self):
         with patch.dict('os.environ', {}, clear=True):
