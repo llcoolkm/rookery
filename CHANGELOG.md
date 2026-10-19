@@ -17,9 +17,9 @@ hub protocol, read durability, delivery and idempotency are unchanged.
   returns every body.
 - MCP `peers` rows are `key` and `status`, with `name` and `alias` only when
   they add information; offline peers read `unknown`.
-- Shorter MCP instructions, tool descriptions and agent rules, with the same
-  delegation and authorization boundaries. String limits moved out of the
-  public tool schema; validation is unchanged.
+- Shorter MCP instructions and tool descriptions; updated agent rules preserve
+  delegation and recovery safeguards. String limits moved out of the public
+  tool schema; validation is unchanged.
 
 ## 0.3.0
 
