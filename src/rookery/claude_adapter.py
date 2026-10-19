@@ -163,13 +163,9 @@ def submit(session: dict, text: str, *, sender_name: str = "rookery-local", allo
         info = os.lstat(sock_path)
         if not stat.S_ISSOCK(info.st_mode) or info.st_uid != os.getuid():
             return {"status": "failed", "detail": "inbox must be an owned socket, not a symlink"}
-        # Display provenance only. All processes under this uid share trust.
-        match = re.search(r"^From: ([^\r\n]+)$", text, re.MULTILINE)
-        if match:
-            sender_name = "rookery/" + match.group(1)
-        message_id = re.search(r"^ID: ([0-9a-f-]{36})$", text, re.MULTILINE)
-        frame = build_frame(text, sender_name, session_id=session["id"], from_addr=None,
-                            msg_id=message_id.group(1) if message_id else None)
+        # The rendered text carries its own JSON envelope; sender_name is
+        # display provenance only. All processes under this uid share trust.
+        frame = build_frame(text, sender_name, session_id=session["id"], from_addr=None)
         data = (json.dumps(frame) + "\n").encode()
     except (OSError, ValueError) as exc:
         return {"status": "failed", "detail": str(exc)}
