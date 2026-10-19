@@ -52,7 +52,7 @@ TOOLS = [
           {"limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20},
            "peek": {"type": "boolean", "default": False}}),
     _tool("status", "Inspect messaging health or the delivery state of one message.",
-          {"message_id": _TEXT}, readonly=True),
+          {"message_id": _TEXT, "verbose": {"type": "boolean"}}, readonly=True),
 ]
 
 
@@ -85,6 +85,14 @@ def _sent_result(value):
             continue
         out["to" if key == "recipient" else key] = val
     return _ordered(out)
+
+
+def _message_status(value):
+    """status(message_id) without the body; health results are untouched."""
+    if not isinstance(value, dict):
+        return value
+    return _ordered({k: v for k, v in value.items()
+                     if v is not None and k not in ("body", "sender", "recipient", "expires")})
 
 
 def _arguments(tool, arguments):
@@ -172,6 +180,8 @@ class Server:
                         value = _sent_result(value)
                     elif operation == "status" and not arguments.get("message_id"):
                         value = {**value, "identity": client.identity()}
+                    elif operation == "status" and not verbose:
+                        value = _message_status(value)
                     result = {"content": [{"type": "text", "text": json.dumps(value, separators=(",", ":"), ensure_ascii=False)}]}
                 except InvalidParams:
                     raise

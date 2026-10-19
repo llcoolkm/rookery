@@ -226,6 +226,26 @@ class MCPTests(unittest.TestCase):
                          ("reply", "x", "y", 5.0))
         self.assertEqual(self.call("reply", {"message_id": "ask-1", "body": "b", "verbose": True}), answer)
 
+    def test_message_status_is_compact_unless_verbose(self):
+        record = {"id": "m1", "request_id": "r1", "sender": "n/claude:me", "recipient": "n/codex:peer",
+                  "kind": "ask", "body": "secret-sized body", "status": "replied", "received_by_host": True,
+                  "read_at": 10.0, "detail": "frame written", "reply_id": "r9", "in_reply_to": None,
+                  "followup_id": "f9", "expires": 99.0}
+        self.client.status.return_value = record
+        value = self.call("status", {"message_id": "m1"})
+        self.assertEqual(value, {"id": "m1", "kind": "ask", "status": "replied", "request_id": "r1",
+                                 "received_by_host": True, "read_at": 10.0, "detail": "frame written",
+                                 "reply_id": "r9", "followup_id": "f9"})
+        self.client.status.assert_called_with(message_id="m1")
+        self.assertEqual(self.call("status", {"message_id": "m1", "verbose": True}), record)
+        self.client.status.return_value = {"id": "m2", "status": "unknown_local"}
+        self.assertEqual(self.call("status", {"message_id": "m2"}), {"id": "m2", "status": "unknown_local"})
+        self.client.status.return_value = {"running": True, "connected": False, "stale": True, "detail": None}
+        self.client.identity.return_value = "n/claude:me"
+        self.assertEqual(self.call("status"), {"running": True, "connected": False, "stale": True,
+                                               "detail": None, "identity": "n/claude:me"})
+        self.client.status.assert_called_with()
+
     def test_provider_and_explicit_binding_are_exclusive(self):
         with patch.dict('os.environ', {}, clear=True):
             with self.assertRaisesRegex(ValueError, 'cannot be combined'):
