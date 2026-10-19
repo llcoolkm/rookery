@@ -1,0 +1,64 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: rookery-hub
+  labels:
+    app.kubernetes.io/name: rookery-hub
+spec:
+  groups:
+    - name: rookery-hub
+      rules:
+        - alert: RookeryHubDown
+          expr: up{job="rookery-hub"} == 0 or absent(up{job="rookery-hub"})
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: Rookery hub is not being scraped
+            description: No successful scrape of the Rookery hub for 5 minutes.
+        - alert: RookeryNodeSilent
+          # Only always-on nodes should page; laptops sleep legitimately, and
+          # nodes stay in the hub's table after revocation. Replace the regex
+          # with your always-on node names; as shipped it matches nothing.
+          expr: time() - rookery_hub_node_last_seen_timestamp_seconds{node=~"CHANGE-ME"} > 600
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: Rookery node {{ $labels.node }} has not contacted the hub
+            description: Node {{ $labels.node }} last seen {{ $value | humanizeDuration }} ago.
+        - alert: RookeryDispatchStuck
+          expr: rookery_hub_oldest_dispatching_age_seconds > 900
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: A Rookery message has been dispatching for over 15 minutes
+            description: Oldest dispatching message is {{ $value | humanizeDuration }} old.
+        - alert: RookeryUncertainMessages
+          expr: rookery_hub_messages{state="uncertain"} > 0
+          for: 30m
+          labels:
+            severity: info
+          annotations:
+            summary: Rookery has {{ $value }} uncertain messages awaiting reconciliation
+            description: Inspect the recipient session, then reconcile explicitly. Uncertain messages are never retried automatically.
+        - alert: RookeryHubDbLarge
+          # 80% of the default --max-bytes (100000000). Adjust if you change it;
+          # near the budget the hub refuses new writes with HTTP 429.
+          expr: rookery_hub_db_bytes > 80e6
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: Rookery hub database exceeds 80 MB
+            description: Retention may be failing; database plus WAL is {{ $value | humanize1024 }}B.
+        - alert: RookeryHubSnapshotStale
+          # Default --snapshot-interval is 86400 s; this allows two hours of slack.
+          expr: time() - rookery_hub_snapshot_last_success_timestamp_seconds > 93600
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: Rookery hub has not written a consistent snapshot in 26 hours
+            description: Check free space on the data volume and the hub log; off-site backups rely on these snapshots.

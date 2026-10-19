@@ -1,0 +1,16 @@
+# Scrapes the hub's private metrics port. The job label defaults to the Service
+# name, rookery-hub, which the alert rules and the Grafana dashboard expect.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: rookery-hub
+  labels:
+    app.kubernetes.io/name: rookery-hub
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: rookery-hub
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: 30s

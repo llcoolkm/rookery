@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+    branches: ['main', 'public-candidate']
+  pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  test-and-package:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.11', '3.12', '3.13', '3.14']
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          version: '0.10.9'
+          python-version: ${{ matrix.python }}
+      - name: Check release version
+        run: python3 scripts/check_release.py
+      - name: Unit tests
+        run: uv run --frozen --extra hub python -m unittest discover -s tests -v
+      - name: Build distributions
+        run: |
+          export SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)
+          uv build --clear
+      - name: Check installed wheel outside the checkout
+        run: |
+          uv venv --python '${{ matrix.python }}' /tmp/rookery-wheel
+          uv pip install --python /tmp/rookery-wheel/bin/python dist/*.whl
+          /tmp/rookery-wheel/bin/python -I scripts/check_release.py --smoke
+      - name: Check installed source distribution outside the checkout
+        run: |
+          uv venv --python '${{ matrix.python }}' /tmp/rookery-sdist
+          uv pip install --python /tmp/rookery-sdist/bin/python dist/*.tar.gz
+          /tmp/rookery-sdist/bin/python -I scripts/check_release.py --smoke
+      - name: Hash distribution files
+        if: matrix.python == '3.11'
+        working-directory: dist
+        run: sha256sum ./*.whl ./*.tar.gz > SHA256SUMS
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: matrix.python == '3.11'
+        with:
+          name: distributions
+          path: dist/
+          if-no-files-found: error

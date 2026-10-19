@@ -1,0 +1,12 @@
+.git
+.github
+.venv
+.runtime
+**/__pycache__
+assets
+docs
+tests
+bin
+deploy
+*.md
+!README.md

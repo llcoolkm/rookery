@@ -1,0 +1,15 @@
+# assets/logo.png is rook-4-teal.png, an envelope-colour edit of rook-4.png.
+
+file: rook-4.png
+model: gemini-3-pro-image-preview
+date: 2026-10-19T11:44:57Z
+prompt: Minimalist emblem logo for a software tool named Rookery: two rooks in side profile, facing each other, perched on one bare branch that curves gently at the bottom, passing a small sealed deep-teal envelope beak to beak; the two birds and the branch together form a compact, nearly circular badge silhouette without any enclosing ring. Head-and-shoulders weight: large heads with emphasised rook features, simplified bodies. Rook identification features must be clearly visible even in flat silhouette: each bird has a large bare off-white (bone-coloured) patch of skin covering the base of the bill, the chin and the face in front of the eye, clearly contrasting with the black head; a long, slender, perfectly straight, sharply pointed dagger-like bill, charcoal grey, not hooked and not curved; a steep forehead and a high peaked domed crown; loose shaggy feathers on the thighs like baggy trousers, visible above the legs. These are rooks (Corvus frugilegus), not generic crows or ravens. Each bird stands on top of the branch with its feet gripping it, body above the branch, tail pointing down and outward behind the branch. Flat vector style, bold clean silhouettes, only three flat colours: charcoal black, off-white, and one muted deep teal accent. No gradients, no grey highlights, no shading, no outline frame, no text, no letters, no watermark, plain off-white background, square composition, suitable as an app icon and README header.
+
+file: rook-4-teal.png
+model: gemini-3-pro-image-preview
+date: 2026-10-19T12:00:11Z
+input image: rook-4.png
+prompt: Edit this image. Change ONLY the colour of the envelope held between the two birds' bills: fill it with a flat bright saturated teal (hex #1FB5A8), with its fold lines still clearly visible as thin dark lines. Keep everything else exactly identical, pixel for pixel: the two rooks, their shapes, bills, off-white face patches, feathers, the branch, the composition, the framing and the plain off-white background. Do not redraw, move, resize or restyle anything else. Flat colours, no gradients, no text.
+
+note: the API returned JPEG bytes for both images; each was re-encoded to PNG with
+ImageMagick.

@@ -1,0 +1,3 @@
+# Reference only: service install renders shell-quoted arguments and appends to
+# the existing [boot] command in /etc/wsl.conf, preserving other boot services.
+/usr/sbin/runuser -u @USER@ -- /usr/bin/env HOME=@HOME@ PATH=@PATH@ @EXECUTABLE@ --state-dir @STATE_DIR@ service supervise --detach

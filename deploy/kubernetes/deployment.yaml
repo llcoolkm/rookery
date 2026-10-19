@@ -1,0 +1,89 @@
+# One replica only. SQLite has a single writer: strategy Recreate stops the old
+# pod before the new one starts, and the hub itself takes an exclusive lock in
+# /data before serving (ReadWriteOnce alone does not fence processes).
+# Never scale above 1; there is no replication or failover.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rookery-hub
+  labels:
+    app.kubernetes.io/name: rookery-hub
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: rookery-hub
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: rookery-hub
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        # Makes the volume writable by the hub; the hub keeps /data/state 0700.
+        fsGroup: 10001
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: hub
+          # Pin the digest as well, so an update is a deliberate change:
+          #   ghcr.io/llcoolkm/rookery:v0.3.0@sha256:<digest of the release>
+          image: ghcr.io/llcoolkm/rookery:v0.3.0
+          args:
+            - hub
+            - serve
+            - --db=/data/state/hub.sqlite3
+            - --tokens=/etc/rookery-hub/tokens.json
+            # Both listeners must bind all interfaces inside the pod; the
+            # Service, Ingress and NetworkPolicy decide who reaches them.
+            - --listen=0.0.0.0:8787
+            - --metrics-listen=0.0.0.0:8788
+            - --max-bytes=100000000
+          ports:
+            - {name: http, containerPort: 8787}
+            - {name: metrics, containerPort: 8788}
+          readinessProbe:
+            httpGet: {path: /readyz, port: metrics}
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet: {path: /healthz, port: metrics}
+            initialDelaySeconds: 20
+            periodSeconds: 20
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - {name: data, mountPath: /data}
+            - {name: tokens, mountPath: /etc/rookery-hub, readOnly: true}
+            - {name: tmp, mountPath: /tmp}
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: "1"
+              # One worst-case bootstrap response (~23 MiB) takes ~58 MiB to build; leave room for several at once.
+              memory: 512Mi
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: rookery-hub-data
+        - name: tokens
+          secret:
+            # Create it yourself; see secret.example.yaml and README.md.
+            secretName: rookery-hub-tokens
+            defaultMode: 0440
+        - name: tmp
+          emptyDir:
+            sizeLimit: 16Mi

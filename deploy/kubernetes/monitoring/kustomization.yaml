@@ -1,0 +1,10 @@
+# Optional: requires the Prometheus Operator CRDs (ServiceMonitor, PrometheusRule).
+#   kubectl apply -k deploy/kubernetes/monitoring
+# Many installs (kube-prometheus-stack) select these by a label such as
+# release: <helm release>; add it under labels below if yours does.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: rookery
+resources:
+  - servicemonitor.yaml
+  - prometheusrule.yaml

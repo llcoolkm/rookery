@@ -1,0 +1,23 @@
+# Reference template. `rookery service install` safely renders absolute installed
+# executable, state directory, HOME and PATH from the selected user/environment.
+[Unit]
+Description=Rookery message helper
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@USER@
+WorkingDirectory=@HOME@
+Environment="HOME=@HOME@"
+Environment="PATH=@PATH@"
+ExecStart=@EXECUTABLE@ --state-dir @STATE_DIR@ daemon
+Restart=always
+RestartSec=5
+TimeoutStopSec=60
+KillMode=mixed
+UMask=0077
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,21 @@
+# The hub keeps everything in one SQLite database with a WAL. Use local or block
+# storage only (local-path, a cloud block volume, Longhorn, Ceph RBD, ...).
+# NEVER NFS, SMB, CephFS or any other network filesystem: their locking and
+# fsync semantics can corrupt SQLite.
+#
+# Size: --max-bytes (100 MB by default) for the database, headroom for its WAL
+# (checkpoints usually keep it small, but a long reader can make it grow), and
+# up to three snapshots of about the database's size plus one in progress.
+# Some provisioners (local-path, hostPath) enforce no quota; watch real usage.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: rookery-hub-data
+  labels:
+    app.kubernetes.io/name: rookery-hub
+spec:
+  accessModes: [ReadWriteOnce]
+  # storageClassName: local-path
+  resources:
+    requests:
+      storage: 1Gi

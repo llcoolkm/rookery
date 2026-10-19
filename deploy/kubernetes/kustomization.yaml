@@ -1,0 +1,13 @@
+# Rookery hub: kubectl apply -k deploy/kubernetes
+# Not included on purpose: secret.example.yaml (create the token Secret
+# yourself) and ingress.example.yaml (adapt host, TLS and controller first).
+# Optional monitoring lives in ./monitoring.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: rookery
+resources:
+  - namespace.yaml
+  - pvc.yaml
+  - deployment.yaml
+  - service.yaml
+  - networkpolicy.yaml

@@ -1,0 +1,939 @@
+{
+  "__requires": [
+    {
+      "type": "grafana",
+      "id": "grafana",
+      "name": "Grafana",
+      "version": "10.0.0"
+    },
+    {
+      "type": "datasource",
+      "id": "prometheus",
+      "name": "Prometheus",
+      "version": "1.0.0"
+    }
+  ],
+  "id": null,
+  "uid": "rookery-hub",
+  "title": "Rookery hub",
+  "description": "Rookery hub: message states, node contact, requests, storage and snapshots. The collapsed row reads the hub's /graph endpoint through the Infinity datasource.",
+  "tags": [
+    "rookery"
+  ],
+  "editable": true,
+  "schemaVersion": 39,
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "refresh": "1m",
+  "templating": {
+    "list": [
+      {
+        "name": "DS_PROMETHEUS",
+        "label": "Prometheus",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": {},
+        "hide": 0,
+        "refresh": 1,
+        "regex": "",
+        "options": []
+      },
+      {
+        "name": "DS_INFINITY",
+        "label": "Infinity (graph row)",
+        "type": "datasource",
+        "query": "yesoreyeram-infinity-datasource",
+        "current": {},
+        "hide": 0,
+        "refresh": 1,
+        "regex": "",
+        "options": []
+      },
+      {
+        "name": "job",
+        "label": "Scrape job",
+        "type": "textbox",
+        "query": "rookery-hub",
+        "current": {
+          "text": "rookery-hub",
+          "value": "rookery-hub"
+        },
+        "hide": 0,
+        "options": []
+      },
+      {
+        "name": "namespace",
+        "label": "Namespace",
+        "type": "textbox",
+        "query": "rookery",
+        "current": {
+          "text": "rookery",
+          "value": "rookery"
+        },
+        "hide": 0,
+        "options": []
+      },
+      {
+        "name": "hub_url",
+        "label": "Hub metrics URL (graph row)",
+        "type": "textbox",
+        "query": "http://rookery-hub.rookery.svc:8788",
+        "current": {
+          "text": "http://rookery-hub.rookery.svc:8788",
+          "value": "http://rookery-hub.rookery.svc:8788"
+        },
+        "hide": 0,
+        "options": []
+      }
+    ]
+  },
+  "annotations": {
+    "list": []
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Hub up",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 6,
+        "h": 4
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "value",
+        "graphMode": "none"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "max(up{job=\"$job\"})",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "description": "Current value across the active hub series. Instant query avoids repeating values from replaced pods in the selected history."
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Pending",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "x": 6,
+        "y": 0,
+        "w": 6,
+        "h": 4
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "value",
+        "graphMode": "none"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "max(rookery_hub_messages{job=\"$job\",state=\"pending\"})",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "description": "Current value across the active hub series. Instant query avoids repeating values from replaced pods in the selected history."
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Uncertain",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 6,
+        "h": 4
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "value",
+        "graphMode": "none"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "max(rookery_hub_messages{job=\"$job\",state=\"uncertain\"})",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "description": "Current value across the active hub series. Instant query avoids repeating values from replaced pods in the selected history."
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Oldest dispatching",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "x": 18,
+        "y": 0,
+        "w": 6,
+        "h": 4
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "value",
+        "graphMode": "none"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "max(rookery_hub_oldest_dispatching_age_seconds{job=\"$job\"})",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "description": "Current value across the active hub series. Instant query avoids repeating values from replaced pods in the selected history."
+    },
+    {
+      "id": 15,
+      "title": "Open messages by current state",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 4,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "stepAfter",
+            "fillOpacity": 50,
+            "lineWidth": 2,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "max by (state) (rookery_hub_messages{job=\"$job\",state=~\"pending|read|dispatching|submitted|uncertain|failed\"})",
+          "legendFormat": "{{state}}"
+        }
+      ],
+      "description": "Outstanding messages over time, not a count of new sends. Submitted means handed to the harness with no confirmed read receipt. Read means fetched by the session but not answered; pending, read and dispatching all count toward the recipient's --pending-limit. Pending, dispatching, uncertain and failed retain their operational meaning.",
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Seconds since node last seen",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 4,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "time() - max by (node) (rookery_hub_node_last_seen_timestamp_seconds{job=\"$job\"})",
+          "legendFormat": "{{node}}"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "API requests per bucket (estimated)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 12,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "drawStyle": "bars",
+            "barAlignment": 0,
+            "fillOpacity": 50,
+            "lineWidth": 2,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum by (code) (increase(rookery_hub_api_requests_total{job=\"$job\"}[$__interval]))",
+          "legendFormat": "{{code}}",
+          "interval": "5m",
+          "intervalFactor": 1
+        }
+      ],
+      "interval": "5m",
+      "maxDataPoints": 96,
+      "description": "Estimated HTTP API requests per $__interval bucket by response code, using counter increase between scrapes. Includes helper sync and long-poll calls; these are not agent messages. Excludes graph, metrics and health diagnostics. Scrape extrapolation can produce fractional counts. For exact agent-message activity use Messages sent per time bucket.",
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Request latency p50/p95",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 12,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "histogram_quantile(0.5, sum by (le) (rate(rookery_hub_request_duration_seconds_bucket{job=\"$job\"}[5m])))",
+          "legendFormat": "p50"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(rookery_hub_request_duration_seconds_bucket{job=\"$job\"}[5m])))",
+          "legendFormat": "p95"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Database size",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 20,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 50,
+            "lineWidth": 2,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "max by (file) (rookery_hub_storage_bytes{job=\"$job\"})",
+          "legendFormat": "{{file}}"
+        }
+      ],
+      "description": "SQLite database and write-ahead log, stacked. Their sum is the live DB+WAL footprint; snapshots are separate."
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Seconds since last snapshot",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 20,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "time() - max(rookery_hub_snapshot_last_success_timestamp_seconds{job=\"$job\"})",
+          "legendFormat": "snapshot"
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "Hub CPU",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 28,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 50,
+            "lineWidth": 2,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"$namespace\",container=\"hub\"}[5m]))",
+          "legendFormat": "cpu cores"
+        }
+      ],
+      "description": "Container CPU from the kubelet's cAdvisor metrics (not the hub exporter); needs a scrape of the kubelet."
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "Hub memory",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 28,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 50,
+            "lineWidth": 2,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum(container_memory_working_set_bytes{namespace=\"$namespace\",container=\"hub\"})",
+          "legendFormat": "working set"
+        }
+      ],
+      "description": "Container working set from the kubelet's cAdvisor metrics (not the hub exporter); needs a scrape of the kubelet."
+    },
+    {
+      "id": 16,
+      "type": "row",
+      "title": "Communication graph (requires Infinity plugin)",
+      "collapsed": true,
+      "gridPos": {
+        "x": 0,
+        "y": 36,
+        "w": 24,
+        "h": 1
+      },
+      "panels": [
+        {
+          "id": 14,
+          "title": "Conversation data coverage",
+          "type": "table",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "${DS_INFINITY}"
+          },
+          "gridPos": {
+            "x": 0,
+            "y": 37,
+            "w": 24,
+            "h": 4
+          },
+          "fieldConfig": {
+            "defaults": {},
+            "overrides": []
+          },
+          "description": "Actual bounded period and bucket width returned by the hub. Truncated=true means the graph is incomplete; narrow the dashboard time range. Message activity counts each message once at creation, independent of later delivery state.",
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "yesoreyeram-infinity-datasource",
+                "uid": "${DS_INFINITY}"
+              },
+              "type": "json",
+              "source": "url",
+              "parser": "backend",
+              "format": "table",
+              "url": "${hub_url}/graph?from=${__from}&to=${__to}",
+              "url_options": {
+                "method": "GET"
+              },
+              "root_selector": "summary",
+              "columns": [
+                {
+                  "selector": "from",
+                  "text": "From",
+                  "type": "timestamp_epoch"
+                },
+                {
+                  "selector": "to",
+                  "text": "To",
+                  "type": "timestamp_epoch"
+                },
+                {
+                  "selector": "bucket_seconds",
+                  "text": "Bucket seconds",
+                  "type": "number"
+                },
+                {
+                  "selector": "truncated",
+                  "text": "Truncated",
+                  "type": "boolean"
+                }
+              ]
+            }
+          ],
+          "options": {
+            "showHeader": true,
+            "cellHeight": "sm"
+          }
+        },
+        {
+          "id": 13,
+          "title": "Agent conversations",
+          "type": "nodeGraph",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "${DS_INFINITY}"
+          },
+          "gridPos": {
+            "x": 0,
+            "y": 41,
+            "w": 24,
+            "h": 18
+          },
+          "fieldConfig": {
+            "defaults": {
+              "decimals": 0
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "mainstat"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Messages"
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "secondarystat"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Status"
+                  }
+                ]
+              }
+            ]
+          },
+          "description": "Each node is a session; arrows show messages sent during the selected period. Main numbers are message counts. Hover for identity and pending/uncertain counts. Metadata only; no message bodies. Data is bounded to the last 7 days; coverage below shows clipping or truncation. Session status is a harness-reported hint, not proof of readiness.",
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "yesoreyeram-infinity-datasource",
+                "uid": "${DS_INFINITY}"
+              },
+              "type": "json",
+              "source": "url",
+              "parser": "backend",
+              "format": "node-graph-nodes",
+              "url": "${hub_url}/graph?from=${__from}&to=${__to}",
+              "url_options": {
+                "method": "GET"
+              },
+              "root_selector": "nodes",
+              "columns": [
+                {
+                  "selector": "id",
+                  "text": "id",
+                  "type": "string"
+                },
+                {
+                  "selector": "title",
+                  "text": "title",
+                  "type": "string"
+                },
+                {
+                  "selector": "subTitle",
+                  "text": "subTitle",
+                  "type": "string"
+                },
+                {
+                  "selector": "mainStat",
+                  "text": "mainStat",
+                  "type": "number"
+                },
+                {
+                  "selector": "secondaryStat",
+                  "text": "secondaryStat",
+                  "type": "string"
+                },
+                {
+                  "selector": "detail__session",
+                  "text": "detail__session",
+                  "type": "string"
+                },
+                {
+                  "selector": "detail__node",
+                  "text": "detail__node",
+                  "type": "string"
+                }
+              ]
+            },
+            {
+              "refId": "B",
+              "datasource": {
+                "type": "yesoreyeram-infinity-datasource",
+                "uid": "${DS_INFINITY}"
+              },
+              "type": "json",
+              "source": "url",
+              "parser": "backend",
+              "format": "node-graph-edges",
+              "url": "${hub_url}/graph?from=${__from}&to=${__to}",
+              "url_options": {
+                "method": "GET"
+              },
+              "root_selector": "edges",
+              "columns": [
+                {
+                  "selector": "id",
+                  "text": "id",
+                  "type": "string"
+                },
+                {
+                  "selector": "source",
+                  "text": "source",
+                  "type": "string"
+                },
+                {
+                  "selector": "target",
+                  "text": "target",
+                  "type": "string"
+                },
+                {
+                  "selector": "mainStat",
+                  "text": "mainStat",
+                  "type": "number"
+                },
+                {
+                  "selector": "secondaryStat",
+                  "text": "secondaryStat",
+                  "type": "string"
+                },
+                {
+                  "selector": "detail__pending",
+                  "text": "detail__pending",
+                  "type": "number"
+                },
+                {
+                  "selector": "detail__uncertain",
+                  "text": "detail__uncertain",
+                  "type": "number"
+                },
+                {
+                  "selector": "color",
+                  "text": "color",
+                  "type": "string"
+                }
+              ]
+            }
+          ],
+          "options": {}
+        },
+        {
+          "id": 5,
+          "type": "timeseries",
+          "title": "Messages sent per time bucket",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "${DS_INFINITY}"
+          },
+          "gridPos": {
+            "x": 0,
+            "y": 59,
+            "w": 24,
+            "h": 8
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "decimals": 0,
+              "min": 0,
+              "custom": {
+                "drawStyle": "bars",
+                "barAlignment": 1,
+                "fillOpacity": 50,
+                "lineWidth": 2,
+                "stacking": {
+                  "mode": "normal",
+                  "group": "A"
+                }
+              }
+            },
+            "overrides": []
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "yesoreyeram-infinity-datasource",
+                "uid": "${DS_INFINITY}"
+              },
+              "type": "json",
+              "source": "url",
+              "parser": "backend",
+              "format": "timeseries",
+              "url": "${hub_url}/graph?from=${__from}&to=${__to}",
+              "url_options": {
+                "method": "GET"
+              },
+              "root_selector": "activity",
+              "columns": [
+                {
+                  "selector": "time",
+                  "text": "Time",
+                  "type": "timestamp_epoch"
+                },
+                {
+                  "selector": "ask",
+                  "text": "Ask",
+                  "type": "number"
+                },
+                {
+                  "selector": "reply",
+                  "text": "Reply",
+                  "type": "number"
+                },
+                {
+                  "selector": "inform",
+                  "text": "Inform",
+                  "type": "number"
+                }
+              ]
+            }
+          ],
+          "description": "Exact message creations from the hub database, stacked by ask/reply/inform. Zero-filled buckets make sparse traffic visible without cumulative totals or misleading rates. Buckets are aligned to UTC; the first and newest buckets can be partial. Bucket width and actual retained period are shown above.",
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom"
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

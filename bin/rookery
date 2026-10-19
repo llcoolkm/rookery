@@ -1,0 +1,13 @@
+#!/usr/bin/env python3
+"""Run the source checkout without installing build dependencies."""
+from pathlib import Path
+import os
+import sys
+root = Path(__file__).resolve().parents[1]
+venv = root / ".venv"
+python = venv / "bin/python"
+if python.is_file() and Path(sys.prefix).resolve() != venv.resolve():
+    os.execv(str(python), [str(python), str(Path(__file__).resolve()), *sys.argv[1:]])
+sys.path.insert(0, str(root / "src"))
+from rookery.cli import main
+raise SystemExit(main())

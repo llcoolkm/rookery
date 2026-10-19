@@ -1,0 +1,17 @@
+# ClusterIP only. Port http (8787) serves POST /v2/rpc and goes behind a TLS
+# Ingress. Port metrics (8788) serves /healthz, /readyz, /metrics and /graph
+# WITHOUT authentication; /graph reveals session names and participants.
+# Never expose the metrics port outside the cluster.
+apiVersion: v1
+kind: Service
+metadata:
+  name: rookery-hub
+  labels:
+    app.kubernetes.io/name: rookery-hub
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: rookery-hub
+  ports:
+    - {name: http, port: 8787, targetPort: http}
+    - {name: metrics, port: 8788, targetPort: metrics}

@@ -1,0 +1,29 @@
+# Default-deny ingress to the hub except:
+#   - the API port from the ingress controller's namespace;
+#   - the metrics port (unauthenticated /metrics and /graph) from the
+#     monitoring namespace (Prometheus scraper, and Grafana if it reads /graph).
+# ADAPT the two namespace names marked below to your cluster. Only enforced
+# if your CNI supports NetworkPolicy. Kubelet probes come from the node and
+# are normally allowed by the CNI regardless of this policy.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: rookery-hub
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: rookery-hub
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx   # ADAPT: your ingress controller's namespace
+      ports:
+        - {protocol: TCP, port: 8787}
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring      # ADAPT: your Prometheus (and Grafana) namespace
+      ports:
+        - {protocol: TCP, port: 8788}

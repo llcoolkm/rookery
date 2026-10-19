@@ -1,0 +1,38 @@
+# EXAMPLE ONLY - not part of the kustomization. Written for ingress-nginx;
+# adapt host, TLS secret and annotations to your controller.
+#
+# Only the exact path /v2/rpc is routed. Ingress cannot match on HTTP method,
+# but the API listener answers 404 to everything except POST /v2/rpc, so other
+# methods reach nothing. Never route the metrics port (8788) here.
+#
+# Helpers long-poll for up to 25 seconds: allow at least 60 seconds per request.
+# Request bodies up to 256 KiB.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: rookery-hub
+  namespace: rookery
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "256k"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "120"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "120"
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    # With cert-manager, for example:
+    # cert-manager.io/cluster-issuer: letsencrypt
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts: [rookery.example.com]
+      secretName: rookery-hub-tls
+  rules:
+    - host: rookery.example.com
+      http:
+        paths:
+          - path: /v2/rpc
+            pathType: Exact
+            backend:
+              service:
+                name: rookery-hub
+                port:
+                  name: http
