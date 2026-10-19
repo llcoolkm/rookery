@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "rookery-agents"
-version = "0.3.0"
+version = "0.3.1"
 description = "Reliable messaging between Codex, Claude Code and Antigravity sessions on Linux and WSL"
 readme = "README.md"
 license = "MIT"
@@ -57,6 +57,7 @@ include = [
     "/docs/operations.md",
     "/docs/design.md",
     "/README.md",
+    "/CHANGELOG.md",
     "/LICENSE",
     "/THREAT_MODEL.md",
     "/SECURITY.md",

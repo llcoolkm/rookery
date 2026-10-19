@@ -34,8 +34,8 @@ spec:
       containers:
         - name: hub
           # Pin the digest as well, so an update is a deliberate change:
-          #   ghcr.io/llcoolkm/rookery:v0.3.0@sha256:<digest of the release>
-          image: ghcr.io/llcoolkm/rookery:v0.3.0
+          #   ghcr.io/llcoolkm/rookery:v0.3.1@sha256:<digest of the release>
+          image: ghcr.io/llcoolkm/rookery:v0.3.1
           args:
             - hub
             - serve

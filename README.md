@@ -14,7 +14,7 @@ Rookery does not start agents, reopen closed conversations, type into terminals,
 or grant permission to do the work described in a message.
 
 > [!WARNING]
-> **Experimental.** Rookery 0.3.0 is alpha software. Its provider integrations
+> **Experimental.** Rookery 0.3.1 is alpha software. Its provider integrations
 > depend on undocumented internals of each harness: Claude Code's cross-session
 > socket directory and `~/.claude/sessions/<pid>.json` records, Codex's managed
 > app-server control socket and its experimental API, and Antigravity's
@@ -103,7 +103,7 @@ sudo install -d -m 0700 -o rookery-hub -g rookery-hub /var/lib/rookery-hub /etc/
 sudo env UV_PYTHON_INSTALL_DIR=/opt/rookery-python \
   "$(command -v uv)" venv --python 3.12 /opt/rookery-hub
 sudo "$(command -v uv)" pip install --python /opt/rookery-hub/bin/python \
-  './rookery_agents-0.3.0-py3-none-any.whl[hub]'
+  './rookery_agents-0.3.1-py3-none-any.whl[hub]'
 ```
 
 Name the interpreter explicitly: any Python from 3.11 to 3.14 works, and uv
@@ -112,7 +112,7 @@ interpreter outside root's home, where the service account could not read it.
 uv avoids `python3 -m venv`, which fails on Ubuntu hosts without the
 `python3-venv` package.
 
-(`uv tool install './rookery_agents-0.3.0-py3-none-any.whl[hub]'` works as well
+(`uv tool install './rookery_agents-0.3.1-py3-none-any.whl[hub]'` works as well
 when run as the account that will serve the hub.)
 
 Write the token-hash file `/etc/rookery-hub/tokens.json`: a JSON object mapping
@@ -149,7 +149,7 @@ On `alpha`, as the account that runs the agents (repeat on `beta` with
 `--node beta`):
 
 ```sh
-uv tool install --python 3.12 ./rookery_agents-0.3.0-py3-none-any.whl
+uv tool install --python 3.12 ./rookery_agents-0.3.1-py3-none-any.whl
 rookery configure --node alpha --url https://hub.example.com \
   --token-file ~/.config/rookery/token
 ```
