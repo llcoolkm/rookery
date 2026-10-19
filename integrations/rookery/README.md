@@ -16,8 +16,12 @@ to upload, including across a helper restart. No extra model acknowledgment
 tool call is needed.
 
 `read` means the message was returned by a session inbox fetch, **not** that
-the model understood it. Read messages remain available in subsequent inbox
-calls so a lost tool response can be recovered. An already-dispatching native
+the model understood it. Read messages remain listed in subsequent inbox
+calls; the MCP `inbox` summarises them (`id`, `from`, `kind`, `status`,
+`read_at`, `in_reply_to`, `body_omitted: true`) unless `include_read: true`
+is passed, which returns every body so a lost tool response can be recovered.
+Unread messages, including ones submitted natively, and mail that expired
+unread are always returned whole. An already-dispatching native
 submission cannot be retracted; reading it records `read_at` without discarding
 the claim or downgrading a submission, acknowledgment, or reply. A definite
 pre-submission hold returns such a message to `read`, not to the native queue.
@@ -147,8 +151,18 @@ These checks prevent accidental cross-session attribution; they do not isolate
 mutually hostile processes sharing the same unrestricted OS account.
 
 `status` includes the bound caller identity for verification.
-`peers` returns compact enrolled peers; the administrative CLI `list`
-continues to show all discovered sessions. Prefer these MCP tools for routine
+`peers` returns compact enrolled peers: `key` and `status`, with `name` when it
+is not just the session UUID, `alias` when set, and `online: false` for an
+offline peer, whose status is always `unknown`. The administrative CLI `list`
+continues to show all discovered sessions.
+
+MCP results are compact. `send` and `reply` return `id`, the resolved recipient
+as `to`, the stored `kind` (answering a reply creates a follow-up `ask`) and
+`status`, plus `request_id`, `received_by_host`, read and thread fields and
+`detail` whenever the result carries them; nothing absent is filled in, so a
+`queued_local` result has no `to`. `status` with a `message_id` omits the body,
+sender and recipient. `verbose: true` on `send`, `reply` or `status` returns
+the full record. The CLI output is unchanged. Prefer these MCP tools for routine
 messaging. The CLI remains available for administration and recovery.
 
 Codex's `config/mcpServer/reload` reloads disk configuration for loaded threads;

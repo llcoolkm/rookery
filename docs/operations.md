@@ -654,7 +654,8 @@ and answered by an agent are different observations. A host receipt is
 automatic; it does not prove model comprehension. A reply confirms an
 application response. A bound inbox fetch records a `read` receipt, which
 suppresses a later native push for the returned messages. Read messages remain
-available for recovery after a lost tool response. Use `inbox --peek` or MCP
+available for recovery after a lost tool response: the CLI shows them whole,
+and MCP `inbox` returns their bodies with `include_read: true`. Use `inbox --peek` or MCP
 `peek: true` for non-consuming inspection. A native submission already in flight
 cannot be retracted.
 
