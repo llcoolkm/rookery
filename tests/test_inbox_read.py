@@ -120,7 +120,59 @@ class InboxReadTests(unittest.TestCase):
         returned = json.loads(second['result']['content'][0]['text'])
         self.assertEqual(returned[0]['id'], message['id'])
         self.assertEqual(returned[0]['status'], 'read')
+        self.assertTrue(returned[0]['body_omitted'])
         self.assertEqual(list((self.path / 'spool').glob('*.json')), [])
+        # The lost body is recoverable on request, still without acknowledgment.
+        full = server.handle({'jsonrpc': '2.0', 'id': 4, 'method': 'tools/call',
+                              'params': {'name': 'inbox', 'arguments': {'include_read': True}}})
+        returned = json.loads(full['result']['content'][0]['text'])
+        self.assertEqual(returned[0]['body'], 'read test')
+        self.assertEqual(self.message(message['id'])['status'], 'read')
+
+    def mcp_inbox(self, **arguments):
+        server = Server(self.client)
+        server.handle({'jsonrpc': '2.0', 'id': 1, 'method': 'initialize', 'params': {'protocolVersion': '2025-06-18'}})
+        response = server.handle({'jsonrpc': '2.0', 'id': 2, 'method': 'tools/call',
+                                  'params': {'name': 'inbox', 'arguments': arguments}})
+        return json.loads(response['result']['content'][0]['text'])
+
+    def test_mcp_inbox_summarises_read_rows_and_keeps_unread_rows_whole(self):
+        read = self.send(body='already fetched')
+        self.client.inbox()
+        self.helper.requests()
+        self.helper.sync_once()
+        native = self.send(body='submitted natively')
+        self.helper.deliver()
+        self.helper.sync_once()
+        self.assertEqual(self.message(native['id'])['status'], 'submitted')
+        fresh = self.send(body='never seen')
+        rows = {row['id']: row for row in self.mcp_inbox(peek=True)}
+        summary = rows[read['id']]
+        self.assertEqual(set(summary), {'id', 'from', 'kind', 'status', 'read_at', 'body_omitted'})
+        self.assertEqual((summary['from'], summary['kind'], summary['status'], summary['body_omitted']),
+                         (self.sender_actor, 'ask', 'read', True))
+        self.assertGreater(summary['read_at'], 0)
+        for message, body in ((native, 'submitted natively'), (fresh, 'never seen')):
+            stored = self.client._read('SELECT data FROM messages WHERE id=?', (message['id'],))[0]
+            self.assertNotIn('read_at', stored)
+            self.assertEqual(rows[message['id']], self.client.compact(stored))
+            self.assertEqual(rows[message['id']]['body'], body)
+        self.assertEqual(list((self.path / 'spool').glob('*.json')), [])  # peek stays non-consuming
+
+    def test_mcp_include_read_does_not_change_read_marking(self):
+        read = self.send(body='first')
+        self.client.inbox()
+        self.helper.requests()
+        self.helper.sync_once()
+        fresh = self.send(body='second')
+        rows = {row['id']: row for row in self.mcp_inbox(include_read=True, peek=True)}
+        self.assertEqual((rows[read['id']]['body'], rows[fresh['id']]['body']), ('first', 'second'))
+        self.assertNotIn('body_omitted', rows[read['id']])
+        self.assertEqual(list((self.path / 'spool').glob('*.json')), [])
+        rows = {row['id']: row for row in self.mcp_inbox(include_read=True)}
+        self.assertEqual(rows[fresh['id']]['body'], 'second')
+        spooled = [json.loads(p.read_text()) for p in (self.path / 'spool').glob('*.json')]
+        self.assertEqual([(r['op'], r['data']['message_ids']) for r in spooled], [('read', [fresh['id']])])
 
     def test_read_batch_authentication_is_atomic(self):
         message = self.send()
@@ -156,6 +208,7 @@ class InboxReadTests(unittest.TestCase):
         with patch('rookery.hub.time.time', return_value=message['expires'] + 1):
             self.assertEqual(self.message(message['id'])['status'], 'expired')
             self.helper.sync_once()
+            self.assertEqual(self.mcp_inbox(peek=True)[0]['body'], 'read test')  # expired unread: whole
             listed = self.client.inbox()
             self.assertEqual([m['id'] for m in listed], [message['id']])
             self.helper.requests()

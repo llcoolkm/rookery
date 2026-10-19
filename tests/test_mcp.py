@@ -61,6 +61,10 @@ class MCPTests(unittest.TestCase):
         result = self.request("tools/call", {"name": "inbox", "arguments": {"peek": True}})
         self.assertNotIn("error", result)
         self.client.inbox.assert_called_once_with(peek=True)
+        self.client.inbox.reset_mock()
+        self.request("tools/call", {"name": "inbox", "arguments": {"include_read": True, "peek": False}})
+        self.client.inbox.assert_called_once_with(peek=False)
+        self.assertEqual(self.request("tools/call", {"name": "inbox", "arguments": {"include_read": 1}})["error"]["code"], -32602)
         for invalid in (1, "true", None):
             result = self.request("tools/call", {"name": "inbox", "arguments": {"peek": invalid}})
             self.assertEqual(result["error"]["code"], -32602)

@@ -50,7 +50,8 @@ TOOLS = [
           {"message_id": _TEXT, "body": _TEXT, "verbose": {"type": "boolean"}}, ("message_id", "body")),
     _tool("inbox", "Fetch open peer messages and suppress later native delivery of pending messages. Already-read messages remain available. Set peek for non-consuming inspection.",
           {"limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20},
-           "peek": {"type": "boolean", "default": False}}),
+           "peek": {"type": "boolean", "default": False},
+           "include_read": {"type": "boolean"}}),
     _tool("status", "Inspect messaging health or the delivery state of one message.",
           {"message_id": _TEXT, "verbose": {"type": "boolean"}}, readonly=True),
 ]
@@ -85,6 +86,23 @@ def _sent_result(value):
             continue
         out["to" if key == "recipient" else key] = val
     return _ordered(out)
+
+
+def _inbox_row(row):
+    """Summarise a row the recipient already fetched; anything never read stays whole.
+
+    Unread rows (including native-submitted ones, since submission is not model
+    receipt) and mail that expired unread keep their full body. Read marking,
+    peek and expiry are decided by the Client and are not affected.
+    """
+    if not isinstance(row, dict) or not row.get("read_at"):
+        return row
+    out = {"id": row.get("id"), "from": row.get("sender"), "kind": row.get("kind"),
+           "status": row.get("status"), "read_at": row["read_at"]}
+    if row.get("in_reply_to"):
+        out["in_reply_to"] = row["in_reply_to"]
+    out["body_omitted"] = True
+    return out
 
 
 def _message_status(value):
@@ -170,6 +188,7 @@ class Server:
                     operation = tool["name"]
                     arguments = dict(arguments)
                     verbose = arguments.pop("verbose", False)
+                    include_read = arguments.pop("include_read", False)
                     value = getattr(client, operation)(**arguments)
                     if operation == "peers" and isinstance(value, dict):
                         fields = {"key", "name", "node", "provider", "status", "online", "alias"}
@@ -178,6 +197,8 @@ class Server:
                                  "stale": value.get("stale", True)}
                     elif operation in ("send", "reply") and not verbose:
                         value = _sent_result(value)
+                    elif operation == "inbox" and not include_read and isinstance(value, list):
+                        value = [_inbox_row(row) for row in value]
                     elif operation == "status" and not arguments.get("message_id"):
                         value = {**value, "identity": client.identity()}
                     elif operation == "status" and not verbose:
