@@ -60,6 +60,35 @@ class MCPTests(unittest.TestCase):
                 self.assertEqual(response["error"]["code"], -32602)
         self.client.send.assert_not_called()
 
+    def test_argument_validation_rejects_before_any_client_call(self):
+        valid = {"send": {"to": "x", "body": "ok"}, "reply": {"message_id": "m", "body": "ok"},
+                 "status": {"message_id": "m"}, "inbox": {}, "peers": {}}
+        strings = {"send": ("to", "body"), "reply": ("message_id", "body"), "status": ("message_id",)}
+        bad_strings = ("", " ", "\n\t", "x" * 16385, 1, None, True, ["x"], {"x": 1})
+        cases = [(tool, {**valid[tool], field: bad}) for tool, fields in strings.items()
+                 for field in fields for bad in bad_strings]
+        cases += [(tool, {**valid[tool], "unknown": 1}) for tool in valid]
+        cases += [(tool, {**valid[tool], "actor": "other"}) for tool in valid]
+        cases += [("send", {"to": "x"}), ("send", {"body": "x"}), ("reply", {"message_id": "m"}),
+                  ("send", {**valid["send"], "kind": "reply"}), ("send", {**valid["send"], "kind": 1}),
+                  ("send", {**valid["send"], "ttl": 0}), ("send", {**valid["send"], "ttl": 86401}),
+                  ("send", {**valid["send"], "ttl": 1.5}), ("send", {**valid["send"], "ttl": True}),
+                  ("inbox", {"limit": 0}), ("inbox", {"limit": 101}), ("inbox", {"limit": "5"}),
+                  ("inbox", {"peek": 1}), ("inbox", {"include_read": "yes"}), ("inbox", {"verbose": True}),
+                  ("send", {**valid["send"], "verbose": 1}), ("reply", {**valid["reply"], "verbose": None}),
+                  ("status", {"message_id": "m", "verbose": "true"}), ("status", {"include_read": True}),
+                  ("peers", {"verbose": True})]
+        for tool, arguments in cases:
+            with self.subTest(tool=tool, arguments=str(arguments)[:80]):
+                response = self.request("tools/call", {"name": tool, "arguments": arguments})
+                self.assertEqual(response["error"]["code"], -32602)
+        for method in ("send", "reply", "status", "inbox", "peers"):
+            getattr(self.client, method).assert_not_called()
+        self.client.send.return_value = {"id": "m", "status": "pending"}
+        for arguments in ({"to": "x" * 16384, "body": "y" * 16384}, {"to": "x", "body": "ok", "kind": "inform", "ttl": 86400}):
+            self.assertNotIn("error", self.request("tools/call", {"name": "send", "arguments": arguments}))
+        self.assertEqual(self.client.send.call_count, 2)
+
     def test_unknown_method_tool_and_initialization(self):
         self.assertEqual(self.request("unknown")["error"]["code"], -32601)
         self.assertEqual(self.request("tools/call", {"name": "unknown"})["error"]["code"], -32602)
