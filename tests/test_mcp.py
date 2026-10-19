@@ -183,7 +183,7 @@ class MCPTests(unittest.TestCase):
             {'key': 'server/codex:two', 'name': 'Two', 'enrolled': False}], 'stale': False}
         response = self.request('tools/call', {'name': 'peers'})
         value = json.loads(response['result']['content'][0]['text'])
-        self.assertEqual(value, {'sessions': [{'key': 'server/codex:one', 'name': 'One', 'online': True}], 'stale': False})
+        self.assertEqual(value, {'sessions': [{'key': 'server/codex:one', 'status': 'unknown', 'name': 'One'}], 'stale': False})
         self.client.status.return_value = {'connected': True}
         self.client.identity.return_value = 'server/codex:one'
         response = self.request('tools/call', {'name': 'status'})
@@ -259,6 +259,42 @@ class MCPTests(unittest.TestCase):
         self.assertEqual(self.call("status"), {"running": True, "connected": False, "stale": True,
                                                "detail": None, "identity": "n/claude:me"})
         self.client.status.assert_called_with()
+
+    def test_peer_rows_drop_redundant_fields_and_never_look_available_when_offline(self):
+        uid = "65b87213-29bf-45e7-8604-9f7baeb51cbc"
+        self.client.peers.return_value = {'sessions': [
+            {'key': f'server/claude:{uid}', 'node': 'server', 'provider': 'claude', 'id': uid, 'name': uid,
+             'status': 'idle', 'online': True, 'alias': None, 'enrolled': True, 'pid': 1},
+            {'key': 'laptop/codex:two', 'node': 'laptop', 'provider': 'codex', 'name': 'Reviewer',
+             'status': 'busy', 'online': True, 'alias': 'rev', 'enrolled': True},
+            {'key': 'laptop/agy:three', 'name': 'three', 'status': 'idle', 'online': False, 'enrolled': True},
+            {'key': 'laptop/agy:four', 'enrolled': True},
+            {'key': 'laptop/agy:five', 'status': '', 'online': True, 'enrolled': True}], 'stale': False}
+        value = self.call('peers')
+        self.assertEqual(value, {'sessions': [
+            {'key': f'server/claude:{uid}', 'status': 'idle'},
+            {'key': 'laptop/codex:two', 'status': 'busy', 'name': 'Reviewer', 'alias': 'rev'},
+            {'key': 'laptop/agy:three', 'status': 'unknown', 'online': False},
+            {'key': 'laptop/agy:four', 'status': 'unknown'},
+            {'key': 'laptop/agy:five', 'status': 'unknown'}], 'stale': False})
+
+    def test_stale_peer_directory_stays_stale_and_unknown(self):
+        from rookery.client import Client
+        with tempfile.TemporaryDirectory() as directory:
+            from rookery.client import configure
+            configure(directory, "test", "http://127.0.0.1:9999", "x" * 32, allow_http=True)
+            with open(os.path.join(directory, "directory.json"), "w") as handle:
+                json.dump({"updated": 0, "sessions": [
+                    {"key": "test/codex:one", "name": "one", "status": "idle", "online": True, "enrolled": True}]}, handle)
+            self.server = Server(Client(directory, actor="test/codex:00000000-0000-4000-8000-000000000001"))
+            self.request("initialize", {"protocolVersion": "2025-06-18"})
+            value = self.call("peers")
+        self.assertEqual(value, {"sessions": [{"key": "test/codex:one", "status": "unknown", "online": False}],
+                                 "stale": True})
+        self.client.peers.return_value = {"sessions": [], "detail": "helper has not connected yet"}
+        self.server = Server(self.client)
+        self.request("initialize", {"protocolVersion": "2025-06-18"})
+        self.assertEqual(self.call("peers"), {"sessions": [], "stale": True})
 
     def test_provider_and_explicit_binding_are_exclusive(self):
         with patch.dict('os.environ', {}, clear=True):

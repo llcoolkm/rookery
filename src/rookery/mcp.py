@@ -109,6 +109,25 @@ def _inbox_row(row):
     return out
 
 
+def _peer_row(peer):
+    """key and status, plus a name that is not just the session UUID and a set alias.
+
+    node and provider are part of key. Absent data never reads as available:
+    a missing status is "unknown", and an offline peer is never idle or busy.
+    """
+    key = peer.get("key")
+    status = peer.get("status") or "unknown"
+    out = {"key": key, "status": "unknown" if peer.get("online") is False else status}
+    if peer.get("online") is False:
+        out["online"] = False
+    name = peer.get("name")
+    if name and not (isinstance(key, str) and ":" in key and name == key.split(":", 1)[1]):
+        out["name"] = name
+    if peer.get("alias"):
+        out["alias"] = peer["alias"]
+    return out
+
+
 def _message_status(value):
     """status(message_id) without the body; health results are untouched."""
     if not isinstance(value, dict):
@@ -195,9 +214,8 @@ class Server:
                     include_read = arguments.pop("include_read", False)
                     value = getattr(client, operation)(**arguments)
                     if operation == "peers" and isinstance(value, dict):
-                        fields = {"key", "name", "node", "provider", "status", "online", "alias"}
-                        value = {"sessions": [{key: val for key, val in peer.items() if key in fields}
-                                              for peer in value.get("sessions", []) if peer.get("enrolled")],
+                        value = {"sessions": [_peer_row(peer) for peer in value.get("sessions", [])
+                                              if isinstance(peer, dict) and peer.get("enrolled")],
                                  "stale": value.get("stale", True)}
                     elif operation in ("send", "reply") and not verbose:
                         value = _sent_result(value)
