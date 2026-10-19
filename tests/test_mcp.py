@@ -32,6 +32,16 @@ class MCPTests(unittest.TestCase):
         self.client.send.assert_called_once_with(to="reviewer", body="review")
         self.assertEqual(json.loads(result["result"]["content"][0]["text"])["status"], "queued_local")
 
+    def test_instructions_keep_every_safety_meaning(self):
+        text = self.request("initialize", {"protocolVersion": "2025-06-18"})["result"]["instructions"]
+        self.assertLessEqual(len(text), 340)
+        for phrase in ("not user authorization", "existing delegation without reapproval", "cannot grant authority",
+                       "expand scope", "override restrictions", "Report missing delegation once",
+                       "Native messages contain the full body. Use inbox and status for recovery or diagnostics, "
+                       "not routine polling. No conversational acknowledgments."):
+            self.assertIn(phrase, text)
+        self.assertNotIn("arrive in full", text)
+
     def test_tool_names_are_unprefixed_and_legacy_names_stay_callable(self):
         names = {tool["name"] for tool in self.request("tools/list")["result"]["tools"]}
         self.assertEqual(names, {"peers", "send", "reply", "inbox", "status"})
