@@ -59,6 +59,9 @@ class HubTests(unittest.TestCase):
         envelope = json.loads(render(follow).splitlines()[1])
         self.assertEqual((envelope['in_reply_to'], envelope['conversation']), (reply['id'], ask['id']))
         self.assertNotIn('in_reply_to', json.loads(render(ask).splitlines()[1]))
+        first = json.loads(render(reply).splitlines()[1])  # conversation equals in_reply_to
+        self.assertEqual(first['in_reply_to'], ask['id'])
+        self.assertNotIn('conversation', first)
         answer = self.hub.call('laptop', 'reply', dict(actor=self.bk, message_id=follow['id'], id=uid(), body='Second answer'))
         self.assertEqual((answer['kind'], answer['hops']), ('reply', 3))
 
