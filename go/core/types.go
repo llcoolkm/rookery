@@ -159,8 +159,8 @@ type Store interface {
 }
 
 type Attempt struct {
-	ClaimID, MessageID string
-	Result             DeliveryResult
+	ClaimID, MessageID, RequestID string
+	Result                        DeliveryResult
 }
 
 // DeliveryResult is held, submitted, failed or uncertain. Only held guarantees

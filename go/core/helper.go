@@ -123,7 +123,7 @@ func (h *Helper) Report(ctx context.Context) error {
 	}
 	for _, a := range attempts {
 		r := SafeResult(a.Result)
-		if e = RPC(ctx, h.Hub, "result", map[string]any{"message_id": a.MessageID, "claim_id": a.ClaimID, "status": r.Status, "detail": r.Detail}, nil); e != nil {
+		if e = RPC(ctx, h.Hub, "result", map[string]any{"message_id": a.MessageID, "claim_id": a.ClaimID, "status": r.Status, "detail": r.Detail, "_request_id": a.RequestID}, nil); e != nil {
 			if !Definite(e) {
 				return e
 			}
@@ -165,7 +165,7 @@ func (h *Helper) Publish(ctx context.Context) error {
 	return nil
 }
 func (h *Helper) Deliver(ctx context.Context) error {
-	messages, e := h.Store.Messages(ctx, "", 100)
+	messages, e := h.Store.PendingMessages(ctx, h.Node, 100)
 	if e != nil {
 		return e
 	}

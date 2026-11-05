@@ -49,6 +49,11 @@ func TestStoreRecoveryAndReadAdmission(t *testing.T) {
 		t.Fatal(e)
 	}
 	a, e := s.Reports(ctx)
+	if len(a) == 1 {
+		if created, e := core.RequestCreated(a[0].RequestID); e != nil || created == nil {
+			t.Fatal("native report lacks durable UUIDv7")
+		}
+	}
 	if e != nil || len(a) != 1 || a[0].Result.Status != "uncertain" {
 		t.Fatalf("recovery %#v %v", a, e)
 	}
@@ -142,5 +147,26 @@ func TestConcurrentAdmission(t *testing.T) {
 	commands, e := s.Commands(ctx, 100)
 	if e != nil || len(commands) != 20 {
 		t.Fatal(fmt.Sprint(len(commands), e))
+	}
+}
+func TestPendingDeliveryNotHiddenByHistory(t *testing.T) {
+	ctx := context.Background()
+	s := newStore(t)
+	events := []core.Event{}
+	for i := 0; i < 101; i++ {
+		m := core.Message{ID: fmt.Sprint(i), Recipient: "alpha/claude:synthetic", Status: core.Submitted, Updated: 100, Expires: 1e12}
+		b, _ := json.Marshal(m)
+		events = append(events, core.Event{Type: "message", Data: b})
+	}
+	for _, m := range []core.Message{{ID: "pending", Recipient: "alpha/claude:synthetic", Status: core.Pending, Updated: 1, Expires: 1e12}, {ID: "outgoing", Recipient: "beta/claude:synthetic", Status: core.Pending, Updated: 101, Expires: 1e12}} {
+		b, _ := json.Marshal(m)
+		events = append(events, core.Event{Type: "message", Data: b})
+	}
+	if e := s.Apply(ctx, events, 104); e != nil {
+		t.Fatal(e)
+	}
+	rows, e := s.PendingMessages(ctx, "alpha", 1)
+	if e != nil || len(rows) != 1 || rows[0].ID != "pending" {
+		t.Fatal("incoming pending work hidden by message history")
 	}
 }

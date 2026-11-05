@@ -8,6 +8,7 @@ import (
 	"io"
 	"io/fs"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -223,7 +224,11 @@ func (s *LocalStore) StartAttempt(ctx context.Context, mid, claim string) error 
 				return errors.New("native attempt cannot be replayed")
 			}
 		}
-		st.Attempts[claim] = storedAttempt{Attempt: Attempt{ClaimID: claim, MessageID: mid}, Created: seconds()}
+		requestID, e := NewRequestID(time.Now())
+		if e != nil {
+			return errors.New("request identity unavailable")
+		}
+		st.Attempts[claim] = storedAttempt{Attempt: Attempt{ClaimID: claim, MessageID: mid, RequestID: requestID}, Created: seconds()}
 		return nil
 	})
 }
@@ -347,6 +352,24 @@ func (s *LocalStore) DeliveryEligible(ctx context.Context, id string) (eligible 
 				eligible = false
 				break
 			}
+		}
+		return nil
+	})
+	return
+}
+
+// PendingMessages filters before limiting; terminal/sent history must never hide
+// older incoming work from the daemon's bounded delivery pass.
+func (s *LocalStore) PendingMessages(ctx context.Context, node string, limit int) (out []Message, err error) {
+	err = s.transaction(ctx, false, func(st *localState) error {
+		for _, m := range st.Messages {
+			if m.Status == Pending && m.Expires > seconds() && strings.HasPrefix(m.Recipient, node+"/") {
+				out = append(out, m)
+			}
+		}
+		sort.Slice(out, func(i, j int) bool { return out[i].Updated > out[j].Updated })
+		if limit > 0 && len(out) > limit {
+			out = out[:limit]
 		}
 		return nil
 	})
