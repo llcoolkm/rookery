@@ -51,6 +51,10 @@ func (f *verifiedFile) Close() error {
 	return f.File.Close()
 }
 func safeStat(st *syscall.Stat_t, private bool, directory bool) bool {
+	return safeStatWithGroup(st, private, directory, privateGroup)
+}
+
+func safeStatWithGroup(st *syscall.Stat_t, private, directory bool, groupOK func(uint32) bool) bool {
 	uid := uint32(os.Geteuid())
 	if st.Uid != uid && (!directory || st.Uid != rootUID) {
 		return false
@@ -58,7 +62,13 @@ func safeStat(st *syscall.Stat_t, private bool, directory bool) bool {
 	if private {
 		return st.Uid == uid && st.Mode&0077 == 0
 	}
-	return st.Mode&0022 == 0 || (directory && st.Uid == rootUID && st.Mode&syscall.S_ISVTX != 0)
+	if directory && st.Uid == rootUID && st.Mode&syscall.S_ISVTX != 0 {
+		return true
+	}
+	if st.Mode&0002 != 0 {
+		return false
+	}
+	return st.Mode&0020 == 0 || (st.Uid == uid && groupOK(st.Gid))
 }
 func dirOpen(path string, private bool) (int, error) {
 	if !filepath.IsAbs(path) || filepath.Clean(path) != path {
@@ -185,7 +195,7 @@ func (f *files) OpenNoFollow(ctx context.Context, root, name string, create bool
 	return f.open(ctx, root, name, create, true)
 }
 
-// OpenProviderRecord permits provider-readable records, but never writable-by-others records.
+// OpenProviderRecord permits provider-readable records and private-group writes.
 func (f *files) OpenProviderRecord(ctx context.Context, root, name string) (platform.File, error) {
 	return f.open(ctx, root, name, false, false)
 }

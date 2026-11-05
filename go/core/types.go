@@ -166,9 +166,11 @@ type Attempt struct {
 // DeliveryResult is held, submitted, failed or uncertain. Only held guarantees
 // no native I/O occurred; submitted is never an acknowledgment by the model.
 type DeliveryResult struct {
-	Extra  map[string]json.RawMessage `json:"-"`
-	Status string                     `json:"status"`
-	Detail string                     `json:"detail,omitempty"`
+	// LocalReason is a fixed diagnostic code, excluded from persistence and RPC.
+	LocalReason string                     `json:"-"`
+	Extra       map[string]json.RawMessage `json:"-"`
+	Status      string                     `json:"status"`
+	Detail      string                     `json:"detail,omitempty"`
 }
 
 // Enrollment binds consent and aliases to an exact session, never a reused PID.

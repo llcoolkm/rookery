@@ -51,7 +51,7 @@ func socketSafe(path string) error {
 	}
 	defer syscall.Close(n)
 	var st syscall.Stat_t
-	if syscall.Fstat(n, &st) != nil || st.Mode&syscall.S_IFMT != syscall.S_IFSOCK || st.Uid != uint32(os.Geteuid()) || st.Mode&0022 != 0 {
+	if syscall.Fstat(n, &st) != nil || st.Mode&syscall.S_IFMT != syscall.S_IFSOCK || !safeStat(&st, false, false) {
 		return errUnsafe
 	}
 	return nil
@@ -83,7 +83,11 @@ func (i *ipc) Dial(ctx context.Context, handle platform.Endpoint) (platform.Conn
 	if err != nil {
 		return nil, err
 	}
-	if err = socketSafe(e.path); err != nil {
+	checkSocket := socketSafe
+	if e.helper {
+		checkSocket = socketPrivate
+	}
+	if err = checkSocket(e.path); err != nil {
 		return nil, err
 	}
 	if e.expected != nil {
@@ -98,7 +102,7 @@ func (i *ipc) Dial(ctx context.Context, handle platform.Endpoint) (platform.Conn
 	}
 	out, err := i.authenticate(ctx, c.(*net.UnixConn), e.expected)
 	if err == nil {
-		err = socketSafe(e.path)
+		err = checkSocket(e.path)
 	}
 	if err != nil {
 		if out != nil {
@@ -178,9 +182,22 @@ func (i *ipc) Listen(ctx context.Context, handle platform.Endpoint) (platform.Li
 		l.Close()
 		return nil, errUnsafe
 	}
-	if err = socketSafe(e.path); err != nil {
+	if err = socketPrivate(e.path); err != nil {
 		l.Close()
 		return nil, err
 	}
 	return &listener{l, i}, nil
+}
+
+// Rookery listeners retain owner-only permissions even when provider endpoints
+// permit private-group writes.
+func socketPrivate(path string) error {
+	if err := socketSafe(path); err != nil {
+		return err
+	}
+	var st syscall.Stat_t
+	if syscall.Lstat(path, &st) != nil || !safeStat(&st, true, false) {
+		return errUnsafe
+	}
+	return nil
 }

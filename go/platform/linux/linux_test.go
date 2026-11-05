@@ -452,8 +452,13 @@ func TestReadOnlyProviderRecords(t *testing.T) {
 	if err = os.Chmod(path, 0664); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = files.OpenProviderRecord(context.Background(), root, "record.json"); err == nil {
-		t.Fatal("accepted group-writable record")
+	if record, err = files.OpenProviderRecord(context.Background(), root, "record.json"); err == nil {
+		record.Close()
+		if !privateGroup(uint32(os.Getgid())) {
+			t.Fatal("accepted shared-group record")
+		}
+	} else if privateGroup(uint32(os.Getgid())) {
+		t.Fatal("rejected private-group record")
 	}
 	if err = os.Chmod(path, 0400); err != nil {
 		t.Fatal(err)
@@ -548,5 +553,102 @@ func TestControlHandlesCachedAndRevoked(t *testing.T) {
 	paths.Revoke(first)
 	if _, err = paths.get(first); err == nil || len(paths.endpoints) != 0 {
 		t.Fatal("capability revocation failed")
+	}
+}
+
+func TestPrivateGroupProviderAncestryAndEndpoint(t *testing.T) {
+	if !privateGroup(uint32(os.Getgid())) {
+		t.Skip("no local private group; policy covered by synthetic database tests")
+	}
+	host, root := testHost(t)
+	ctx := context.Background()
+	providerRoot := filepath.Join(root, "provider")
+	records := filepath.Join(providerRoot, "sessions")
+	if err := os.MkdirAll(records, 0700); err != nil {
+		t.Fatal(err)
+	}
+	for _, dir := range []string{providerRoot, records} {
+		if err := os.Chmod(dir, 0775); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("CLAUDE_CONFIG_DIR", providerRoot)
+	path := filepath.Join(records, "record.json")
+	if err := os.WriteFile(path, []byte("{}"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0664); err != nil {
+		t.Fatal(err)
+	}
+	record, err := host.Files.(*files).OpenProviderRecord(ctx, providerRoot, "sessions/record.json")
+	if err != nil {
+		t.Fatal("private-group record or ancestor rejected", err)
+	}
+	defer record.Close()
+	socket := filepath.Join(providerRoot, "native.sock")
+	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: socket, Net: "unix"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	if err := os.Chmod(socket, 0660); err != nil {
+		t.Fatal(err)
+	}
+	ref, err := host.Process.Current(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ep, err := host.Paths.HarnessEndpoint(ctx, "claude", record, socket, ref)
+	if err != nil {
+		t.Fatal("private-group endpoint rejected", err)
+	}
+	conn, err := host.IPC.Dial(ctx, ep)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn.Close()
+	if _, err := host.Files.OpenNoFollow(ctx, providerRoot, "sessions/record.json", false); err == nil {
+		t.Fatal("relaxed private file mode")
+	}
+	if err := os.Chmod(records, 0777); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := host.Paths.HarnessEndpoint(ctx, "claude", record, socket, ref); err == nil {
+		t.Fatal("accepted changed unsafe ancestry")
+	}
+	if err := os.Chmod(records, 0775); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0666); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := host.Paths.HarnessEndpoint(ctx, "claude", record, socket, ref); err == nil {
+		t.Fatal("accepted changed unsafe record")
+	}
+	if err := os.Chmod(socket, 0666); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := host.IPC.Dial(ctx, ep); err == nil {
+		t.Fatal("accepted other-writable endpoint")
+	}
+}
+
+func TestHelperSocketStaysPrivate(t *testing.T) {
+	host, root := testHost(t)
+	ctx := context.Background()
+	ep, err := host.Paths.Endpoint("helper.sock")
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener, err := host.IPC.Listen(ctx, ep)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	if err := os.Chmod(filepath.Join(root, "helper.sock"), 0660); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := host.IPC.Dial(ctx, ep); err == nil {
+		t.Fatal("accepted group-accessible helper socket")
 	}
 }

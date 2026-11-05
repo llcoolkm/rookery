@@ -33,6 +33,7 @@ type Adapter struct {
 	busy         bool
 	mu           sync.Mutex
 	destinations map[string]destination
+	heldReasons  map[string]string
 	owner        *platform.ProcessRef
 }
 type Factory struct{}
@@ -193,6 +194,7 @@ func (a *Adapter) Discover(ctx context.Context) ([]core.Session, error) {
 	}
 	sessions := []core.Session{}
 	destinations := map[string]destination{}
+	heldReasons := map[string]string{}
 	counts := map[string]int{}
 	for _, r := range rows {
 		if canonical(r.ID) && r.PID > 0 {
@@ -223,6 +225,7 @@ func (a *Adapter) Discover(ctx context.Context) ([]core.Session, error) {
 			file, err = a.host.Files.OpenNoFollow(ctx, root, fmt.Sprintf("sessions/%d.json", r.PID), false)
 		}
 		if err != nil {
+			heldReasons[r.ID] = "record_unsafe"
 			continue
 		}
 		var record struct {
@@ -232,11 +235,13 @@ func (a *Adapter) Discover(ctx context.Context) ([]core.Session, error) {
 		b, readErr := io.ReadAll(io.LimitReader(file, (1<<20)+1))
 		if readErr != nil || len(b) > 1<<20 || json.Unmarshal(b, &record) != nil || record.Address == "" || (record.ID != "" && record.ID != r.ID) {
 			file.Close()
+			heldReasons[r.ID] = "record_invalid"
 			continue
 		}
 		ep, err := a.host.Paths.HarnessEndpoint(ctx, "claude", file, record.Address, pin)
 		file.Close()
 		if err != nil || a.host.Process.Pin(ctx, pin) != nil {
+			heldReasons[r.ID] = "endpoint_unsafe"
 			if ep != "" {
 				a.revoke(ep)
 			}
@@ -249,6 +254,7 @@ func (a *Adapter) Discover(ctx context.Context) ([]core.Session, error) {
 		a.revoke(old.endpoint)
 	}
 	a.destinations = destinations
+	a.heldReasons = heldReasons
 	a.mu.Unlock()
 	return sessions, nil
 }
@@ -316,27 +322,40 @@ func BuildFrame(body, name, id string) ([]byte, error) {
 func outcome(status, detail string) (core.DeliveryResult, error) {
 	return core.DeliveryResult{Status: status, Detail: detail}, nil
 }
+func held(reason, detail string) (core.DeliveryResult, error) {
+	return core.DeliveryResult{Status: "held", Detail: detail, LocalReason: reason}, nil
+}
 func (a *Adapter) Deliver(ctx context.Context, s core.Session, m core.Message) (core.DeliveryResult, error) {
 	if !canonical(s.ID) {
 		return outcome("failed", "Claude destination must be an exact UUID")
 	}
 	if s.Delivery == "polling" {
-		return outcome("held", "polling session; no submission attempted")
+		return held("polling", "polling session; no submission attempted")
 	}
 	a.mu.Lock()
 	dest, ok := a.destinations[s.ID]
+	reason := a.heldReasons[s.ID]
 	a.mu.Unlock()
-	if !ok || s.ProcessRef == nil || *s.ProcessRef != dest.pin || dest.pin.PID != s.PID || a.host.Process.Pin(ctx, dest.pin) != nil {
-		return outcome("held", "session identity changed; no submission attempted")
+	if !ok {
+		if reason == "" {
+			reason = "pin_mismatch"
+		}
+		return held(reason, "session identity changed; no submission attempted")
+	}
+	if s.ProcessRef == nil || *s.ProcessRef != dest.pin || dest.pin.PID != s.PID || a.host.Process.Pin(ctx, dest.pin) != nil {
+		return held("pin_mismatch", "session identity changed; no submission attempted")
 	}
 	state, err := a.Busy(ctx, s)
 	current := s
 	current.Status = string(state)
 	if err != nil || !(state == provider.Idle || state == provider.Busy && a.Admission(current) == provider.AdmitBusy) {
-		return outcome("held", "no confirmed native inbox; no submission attempted")
+		return held("not_idle", "no confirmed native inbox; no submission attempted")
 	}
-	if a.host.Process.Pin(ctx, dest.pin) != nil || m.Expires <= float64(time.Now().UnixNano())/1e9 {
-		return outcome("held", "session identity or expiry changed; no submission attempted")
+	if a.host.Process.Pin(ctx, dest.pin) != nil {
+		return held("pin_mismatch", "session identity or expiry changed; no submission attempted")
+	}
+	if m.Expires <= float64(time.Now().UnixNano())/1e9 {
+		return held("expired", "session identity or expiry changed; no submission attempted")
 	}
 	b, err := BuildFrame(core.Render(m), "rookery-local", s.ID)
 	if err != nil {
@@ -349,13 +368,16 @@ func (a *Adapter) Deliver(ctx context.Context, s core.Session, m core.Message) (
 	defer conn.Close()
 	peer, err := conn.Peer()
 	if err != nil || peer != dest.pin {
-		return outcome("held", "session identity changed; no submission attempted")
+		return held("pin_mismatch", "session identity changed; no submission attempted")
 	}
 	if conn.SetWriteDeadline(time.Now().Add(5*time.Second)) != nil {
 		return outcome("failed", "Claude inbox unavailable")
 	}
-	if a.host.Process.Pin(ctx, dest.pin) != nil || m.Expires <= float64(time.Now().UnixNano())/1e9 {
-		return outcome("held", "session identity or expiry changed; no submission attempted")
+	if a.host.Process.Pin(ctx, dest.pin) != nil {
+		return held("pin_mismatch", "session identity or expiry changed; no submission attempted")
+	}
+	if m.Expires <= float64(time.Now().UnixNano())/1e9 {
+		return held("expired", "session identity or expiry changed; no submission attempted")
 	}
 	for len(b) > 0 {
 		n, err := conn.Write(b)

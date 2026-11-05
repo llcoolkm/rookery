@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"strings"
 	"sync"
 	"time"
@@ -254,7 +255,7 @@ func (h *Helper) Deliver(ctx context.Context) error {
 		if e = h.Store.StartAttempt(ctx, m.ID, d.ClaimID); e != nil {
 			return e
 		}
-		result := DeliveryResult{Status: "held"}
+		result := DeliveryResult{Status: "held", LocalReason: "not_ready"}
 		fresh := []Session{}
 		if h.Native.Discover != nil {
 			fresh, _ = h.Native.Discover(ctx)
@@ -279,11 +280,26 @@ func (h *Helper) Deliver(ctx context.Context) error {
 		}
 		exactClaim := d.Message.ID == m.ID && d.Message.Recipient == m.Recipient && d.Session.ID == target.ID && d.Session.Provider == target.Provider
 		pinnedSame := live != nil && target.ProcessRef != nil && live.ProcessRef != nil && *target.ProcessRef == *live.ProcessRef
+		switch {
+		case pendingRead:
+			result.LocalReason = "pending_read"
+		case !exactClaim:
+			result.LocalReason = "claim_mismatch"
+		case !pinnedSame || live.PID != target.PID || live.PID != d.Session.PID:
+			result.LocalReason = "pin_mismatch"
+		case !h.Native.Ready(*live):
+			result.LocalReason = "not_idle"
+		case d.Message.Expires <= seconds():
+			result.LocalReason = "expired"
+		}
 		if !pendingRead && exactClaim && pinnedSame && live.PID == target.PID && live.PID == d.Session.PID && h.Native.Ready(*live) && d.Message.Expires > seconds() && h.Native.Submit != nil {
 			result, e = h.Native.Submit(ctx, *live, d.Message)
 			if e != nil {
 				result = DeliveryResult{Status: "uncertain"}
 			}
+		}
+		if result.Status == "held" {
+			logHeld(result.LocalReason)
 		}
 		if e = h.Store.FinishAttempt(ctx, d.ClaimID, result); e != nil {
 			return e
@@ -438,4 +454,15 @@ func (h *Helper) Run(ctx context.Context, once bool) error {
 		case <-time.After(delay):
 		}
 	}
+}
+
+// logHeld accepts only fixed codes; provider errors and session metadata never
+// enter local logs. The wire result is independently sanitized by SafeResult.
+func logHeld(reason string) {
+	switch reason {
+	case "record_unsafe", "record_invalid", "endpoint_unsafe", "pin_mismatch", "not_idle", "polling", "expired", "pending_read", "claim_mismatch", "not_ready":
+	default:
+		reason = "not_ready"
+	}
+	log.Printf("native delivery held reason=%s", reason)
 }

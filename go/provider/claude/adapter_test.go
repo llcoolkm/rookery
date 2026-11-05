@@ -65,12 +65,16 @@ func (*fakeFile) Close() error              { return nil }
 type fakeFiles struct {
 	record string
 	opened []string
+	err    error
 }
 
 func (*fakeFiles) PrivateState(context.Context, string) (string, error) { return "", nil }
 func (*fakeFiles) EnsurePrivate(context.Context, string, bool) error    { return nil }
 func (f *fakeFiles) OpenNoFollow(_ context.Context, _ string, name string, _ bool) (platform.File, error) {
 	f.opened = append(f.opened, name)
+	if f.err != nil {
+		return nil, f.err
+	}
 	return &fakeFile{bytes.NewReader([]byte(f.record))}, nil
 }
 func (*fakeFiles) AtomicWrite(context.Context, string, string, []byte) error { return nil }
@@ -287,5 +291,40 @@ func TestAllowlistSkipsUnselectedRecordsAndEmptySkipsCLI(t *testing.T) {
 	rows, err = a.Discover(context.Background())
 	if err != nil || len(rows) != 1 || len(files.opened) != 1 || files.opened[0] != "sessions/42.json" {
 		t.Fatal(rows, err, files.opened)
+	}
+}
+
+func TestHeldReasonsStayLocalAndDistinguishFailures(t *testing.T) {
+	a, exec, ipc, process, s := fixture(t, provider.Config{})
+	files := a.host.Files.(*fakeFiles)
+	files.err = errors.New("synthetic private record path")
+	if _, err := a.Discover(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	r, err := a.Deliver(context.Background(), s, message())
+	if err != nil || r.Status != "held" || r.LocalReason != "record_unsafe" || ipc.calls != 0 {
+		t.Fatal(r, err)
+	}
+	b, err := json.Marshal(r)
+	if err != nil || strings.Contains(string(b), "record_unsafe") || strings.Contains(string(b), "synthetic private") {
+		t.Fatal(string(b), err)
+	}
+	if safe := core.SafeResult(r); safe.LocalReason != "" || safe.Detail != "session no longer ready; no input submitted" {
+		t.Fatal(safe)
+	}
+	files.err = nil
+	if _, err := a.Discover(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	process.changed = true
+	r, _ = a.Deliver(context.Background(), s, message())
+	if r.LocalReason != "pin_mismatch" {
+		t.Fatal(r)
+	}
+	process.changed = false
+	exec.rows[0].Status = "waiting"
+	r, _ = a.Deliver(context.Background(), s, message())
+	if r.LocalReason != "not_idle" || ipc.calls != 0 {
+		t.Fatal(r)
 	}
 }

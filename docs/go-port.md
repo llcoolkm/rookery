@@ -52,7 +52,8 @@ Phase 1 requires no third-party runtime dependencies.
   interfaces, no direct OS commands, syscalls or hard-coded OS paths.
 - `platform/` declares IPC, Process, Executor, Files, Service and Paths once.
   Implement Linux and Windows under OS build tags in `platform/linux` and
-  `platform/windows`. Platform code owns command execution and native handles.
+  `platform/windows`. Platform code owns command execution, native handles and the shared Linux
+  private-group filesystem policy described below.
   `Executor.Exec(ctx, Spec{Path, Args, Stdin, Timeout, MaxOutput})` supports
   `claude agents --json` with bounded output and direct native executable calls.
   Codex delivery uses the authenticated control-socket RPC connection exclusively;
@@ -85,6 +86,29 @@ open Python helper state or silently infer that its SQLite schema is compatible.
 Hub compatibility is mandatory; shared on-disk compatibility is not. Configuration
 import needs an explicit reviewed design before implementation.
 
+## Linux filesystem security
+
+Provider records, their ancestors and harness endpoints share one Linux
+StrictModes check. Group-writable objects are accepted only when owned by the
+current account and their gid is that account's primary gid, with no other
+explicit member and no other account using that primary gid. A group named for
+the account is accepted only if these membership checks also pass; differently
+named groups can qualify through exclusive membership. The platform parses
+`/etc/passwd` and `/etc/group` directly without cgo. Missing, unreadable,
+malformed or ambiguous databases fail closed for the group-write exception;
+NSS-only identities cannot establish it. Membership is rechecked, not cached.
+Other-writable objects remain refused, with the existing root-owned sticky
+ancestor exception unchanged. Descriptor traversal, no-follow checks, provenance
+revalidation and authenticated process pins remain required.
+
+Rookery-created state, credentials and helper sockets retain owner-only
+0600/0700 rules; the exception applies to provider objects and trusted ancestors.
+Claude records written as 0664 below 0775 private-group directories are therefore
+usable without changing the provider's umask. Local daemon logs distinguish
+held outcomes using fixed redacted reason codes such as `record_unsafe`,
+`pin_mismatch` and `not_idle`. These diagnostics contain no paths or identities,
+are excluded from serialized results, and never enter hub details.
+
 ## Windows security model
 
 Create state directories, credentials, lock files and IPC objects with owner-only
@@ -102,7 +126,8 @@ socket owner and no-symlink checks; named pipes use
 GetNamedPipeServerProcessId plus process token SID and owner/DACL checks.
 `Paths.Endpoint` issues opaque endpoint handles for helper IPC. Harness-record
 addresses, including absolute OS paths, enter through `Paths.HarnessEndpoint`.
-The provider first opens the record through `Files.OpenNoFollow` under its
+The provider first opens the record through the Linux `OpenProviderRecord`
+capability (or strict `Files.OpenNoFollow` fallback) under its
 `Paths.ProviderData` root and parses the address and expected server from that
 same verified record. It passes the still-open record handle, provider name,
 address and expected server `ProcessRef` to the resolver. The resolver verifies
@@ -461,3 +486,16 @@ responses, connection loss after request write (uncertain), and an unloaded
 thread (held without queue submission). No live hub, live sessions or real
 credentials were used. Windows runtime and installed-harness acceptance remain
 UNVERIFIED; cross-build success does not establish them.
+
+### Phase 2d verification
+
+The private-group compatibility fix passed all 310 Python tests, `go vet ./...`,
+`go test ./...`, `go test -race ./...`, cgo-disabled Linux and Windows builds,
+and the portable OS-import gate for both targets. Synthetic account databases
+cover private groups, additional explicit and primary-gid members, malformed
+records and read failures. Filesystem tests cover 0664 provider records under
+0775 private-group ancestors, authenticated provider endpoints, changed unsafe
+provenance and strict helper socket modes. Redacted-log tests verify fixed codes
+and exclusion from serialized and hub results. Whitespace and added-line privacy
+checks passed. No live hub, live harness sessions or real credentials were used;
+installed-harness acceptance remains outstanding.
