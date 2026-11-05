@@ -19,9 +19,6 @@ import (
 
 type executor struct{}
 
-// LinuxMessageArgv retains the Python helper's documented Linux exposure.
-func (executor) LinuxMessageArgv() bool { return true }
-
 type output struct {
 	mu             sync.Mutex
 	left           int64

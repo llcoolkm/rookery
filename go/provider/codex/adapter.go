@@ -18,17 +18,28 @@ const IdentityError = "Codex caller identity unavailable or inconsistent. Reconn
 
 var errDiscovery = errors.New("Codex session discovery unavailable")
 
+// rpcError records a structurally valid remote error without exposing its text.
+// A queue error may follow persistence; it is not proof of non-submission.
+type rpcError struct {
+	code                 int
+	experimentalRequired bool
+}
+
+func (e *rpcError) Error() string { return "Codex RPC rejected request" }
+
+// errUncertain is returned once a request may have reached the server.
+var errUncertain = errors.New("Codex RPC outcome unknown")
+
 // Options contains installation-selected facilities, never peer tool arguments.
-// Endpoint must be issued by the platform. MessageStdinFlag is accepted only
-// after queue --help explicitly advertises that exact flag.
+// Endpoint must be issued by the platform. Delivery uses only this connection.
 type Options struct {
-	Executable       string
-	Endpoint         platform.Endpoint
-	MessageStdinFlag string
+	Endpoint platform.Endpoint
 }
 type Adapter struct {
 	config  provider.Config
-	host    platform.Host
+	ipc     platform.IPC
+	process platform.Process
+	paths   platform.Paths
 	options Options
 	mu      sync.Mutex
 	pins    map[string]platform.ProcessRef
@@ -40,11 +51,8 @@ func New(c provider.Config, h platform.Host) (*Adapter, error) {
 	return NewWithOptions(c, h, Options{})
 }
 func NewWithOptions(c provider.Config, h platform.Host, o Options) (*Adapter, error) {
-	if o.Executable == "" {
-		o.Executable = c.CodexExecutable
-	}
 	c.SessionAllowlist = appendAllowlist(c.SessionAllowlist)
-	return &Adapter{config: c, host: h, options: o, pins: map[string]platform.ProcessRef{}}, nil
+	return &Adapter{config: c, ipc: h.IPC, process: h.Process, paths: h.Paths, options: o, pins: map[string]platform.ProcessRef{}}, nil
 }
 func appendAllowlist(ids []string) []string {
 	if ids == nil {
@@ -94,7 +102,7 @@ type proxy struct {
 func (a *Adapter) open(ctx context.Context) (*proxy, error) {
 	ep := a.options.Endpoint
 	if ep == "" {
-		if p, ok := a.host.Paths.(interface {
+		if p, ok := a.paths.(interface {
 			ControlEndpoint(context.Context, string) (platform.Endpoint, error)
 		}); ok {
 			var err error
@@ -104,10 +112,10 @@ func (a *Adapter) open(ctx context.Context) (*proxy, error) {
 			}
 		}
 	}
-	if ep == "" || a.host.IPC == nil {
+	if ep == "" || a.ipc == nil {
 		return nil, errDiscovery
 	}
-	conn, err := a.host.IPC.Dial(ctx, ep)
+	conn, err := a.ipc.Dial(ctx, ep)
 	if err != nil {
 		return nil, errDiscovery
 	}
@@ -148,16 +156,17 @@ func (p *proxy) call(method string, params, out any) error {
 		return errDiscovery
 	}
 	if err = p.ws.Send(b); err != nil {
-		return errDiscovery
+		// Send can fail after a partial or complete write. Never replay it.
+		return errUncertain
 	}
 	for {
 		b, err = p.ws.Receive()
 		if err != nil {
-			return errDiscovery
+			return errUncertain
 		}
 		var row map[string]json.RawMessage
 		if json.Unmarshal(b, &row) != nil || row == nil {
-			return errDiscovery
+			return errUncertain
 		}
 		var id int
 		if json.Unmarshal(row["id"], &id) != nil || id != p.counter {
@@ -166,15 +175,22 @@ func (p *proxy) call(method string, params, out any) error {
 		if _, ok := row["method"]; ok {
 			continue
 		}
-		if _, ok := row["error"]; ok {
-			return errDiscovery
+		if raw, ok := row["error"]; ok {
+			var remote struct {
+				Code    *int    `json:"code"`
+				Message *string `json:"message"`
+			}
+			if _, both := row["result"]; both || json.Unmarshal(raw, &remote) != nil || remote.Code == nil || remote.Message == nil {
+				return errUncertain
+			}
+			return &rpcError{code: *remote.Code, experimentalRequired: *remote.Code == -32600 && *remote.Message == "thread/queue/add requires experimentalApi capability"}
 		}
 		var obj map[string]json.RawMessage
 		if json.Unmarshal(row["result"], &obj) != nil || obj == nil {
-			return errDiscovery
+			return errUncertain
 		}
 		if out != nil && json.Unmarshal(row["result"], out) != nil {
-			return errDiscovery
+			return errUncertain
 		}
 		return nil
 	}
@@ -322,78 +338,71 @@ func (a *Adapter) Deliver(ctx context.Context, s core.Session, m core.Message) (
 	a.mu.Lock()
 	pin, ok := a.pins[s.ID]
 	a.mu.Unlock()
-	if !ok || s.ProcessRef == nil || *s.ProcessRef != pin || pin.PID != s.PID || a.host.Process.Pin(ctx, pin) != nil {
+	if !ok || a.process == nil || s.ProcessRef == nil || *s.ProcessRef != pin || pin.PID != s.PID || a.process.Pin(ctx, pin) != nil {
 		return outcome("held", "session identity changed; no submission attempted")
 	}
 	p, err := a.open(ctx)
 	if err != nil {
 		return outcome("held", "Codex session discovery unavailable; no submission attempted")
 	}
+	defer p.conn.Close()
 	peer, err := p.conn.Peer()
 	if err != nil || peer != pin {
-		p.conn.Close()
 		return outcome("held", "session identity changed; no submission attempted")
 	}
 	var reply struct {
 		Thread Thread `json:"thread"`
 	}
 	err = p.call("thread/read", map[string]any{"threadId": s.ID, "includeTurns": false}, &reply)
-	p.conn.Close()
 	if err != nil || reply.Thread.ID != s.ID || Normalize(reply.Thread).Status != "idle" {
 		return outcome("held", "Codex recipient is not confirmed idle; no submission attempted")
 	}
-	executable := a.options.Executable
-	if executable == "" {
-		if p, ok := a.host.Paths.(interface{ Executable(string) (string, error) }); ok {
-			executable, _ = p.Executable("codex")
-		}
-	}
-	if executable == "" || a.host.Exec == nil {
-		return outcome("held", "Codex executable unavailable; no submission attempted")
-	}
-	// Prefer an explicitly advertised stdin route. Linux alone permits the
-	// documented argv fallback; never infer that '-' means stdin.
-	flag := a.options.MessageStdinFlag
-	if flag == "" {
-		flag = "--message-stdin"
-	}
-	if flag != "--message-stdin" {
-		return outcome("held", "Codex queue has no verified private input route; no submission attempted")
-	}
-	help, err := a.host.Exec.Exec(ctx, platform.Spec{Path: executable, Args: []string{"queue", "--help"}, Timeout: 5 * time.Second, MaxOutput: 64 << 10})
-	if err != nil || help.State != platform.Completed || help.ExitCode != 0 {
-		return outcome("held", "Codex queue has no verified private input route; no submission attempted")
-	}
-	if a.host.Process.Pin(ctx, pin) != nil || m.Expires <= float64(time.Now().UnixNano())/1e9 {
+	// Helper.Deliver has already durably journaled the exact hub claim and
+	// rechecked its destination. Revalidate local authority immediately before
+	// the only mutating RPC, on the same authenticated connection as thread/read.
+	if a.process.Pin(ctx, pin) != nil || m.Expires <= float64(time.Now().UnixNano())/1e9 || ctx.Err() != nil {
 		return outcome("held", "session identity or expiry changed; no submission attempted")
 	}
-	args := []string{"queue", "--thread", s.ID, flag}
-	stdin := []byte(core.Render(m))
-	if !hasFlag(string(help.Stdout), flag) {
-		argv, linux := a.host.Exec.(interface{ LinuxMessageArgv() bool })
-		if !linux || !argv.LinuxMessageArgv() || !hasFlag(string(help.Stdout), "--message") {
-			return outcome("held", "Codex queue has no verified private input route; no submission attempted")
+	if !canonical(m.ID) {
+		return outcome("held", "message identity unavailable; no submission attempted")
+	}
+	input := []textInput{{Type: "text", Text: core.Render(m), TextElements: []json.RawMessage{}}}
+	params := queueAddParams{ThreadID: s.ID, Input: input, ClientUserMessageID: m.ID}
+	var result queueAddResponse
+	if err = p.call("thread/queue/add", params, &result); err != nil {
+		var remote *rpcError
+		if errors.As(err, &remote) && (remote.code == -32601 || remote.experimentalRequired) {
+			return outcome("held", "Codex queue RPC unsupported; no submission accepted")
 		}
-		// Linux Python parity: argv is visible to local process inspection.
-		args = []string{"queue", "--thread", s.ID, "--message", string(stdin)}
-		stdin = nil
-	}
-	result, err := a.host.Exec.Exec(ctx, platform.Spec{Path: executable, Args: args, Stdin: stdin, Timeout: 20 * time.Second, MaxOutput: 64 << 10})
-	if result.State == platform.NotStarted {
-		return outcome("failed", "Codex queue did not start")
-	}
-	if err != nil || result.State != platform.Completed || result.ExitCode != 0 {
+		if errors.Is(err, errDiscovery) {
+			return outcome("held", "Codex queue request could not be prepared; no submission attempted")
+		}
 		return outcome("uncertain", "Codex queue outcome unknown; reconcile before retrying")
+	}
+	queued := result.QueuedSubmission
+	if queued.ID == "" || queued.ClientUserMessageID != m.ID || len(queued.Input) != 1 || queued.Input[0].Type != "text" || queued.Input[0].Text != input[0].Text || queued.Input[0].TextElements == nil || len(queued.Input[0].TextElements) != 0 {
+		return outcome("uncertain", "Codex queue response unverified; reconcile before retrying")
 	}
 	return outcome("submitted", "Codex queue accepted input; recipient receipt unconfirmed")
 }
-func hasFlag(help, flag string) bool {
-	for _, v := range strings.Fields(help) {
-		if strings.Trim(v, ",[]") == flag {
-			return true
-		}
-	}
-	return false
+
+// rust-v0.166.0 app-server-protocol/src/protocol/v2/thread.rs.
+type textInput struct {
+	Type         string            `json:"type"`
+	Text         string            `json:"text"`
+	TextElements []json.RawMessage `json:"text_elements"`
+}
+type queueAddParams struct {
+	ThreadID            string      `json:"threadId"`
+	Input               []textInput `json:"input"`
+	ClientUserMessageID string      `json:"clientUserMessageId"`
+}
+type queueAddResponse struct {
+	QueuedSubmission struct {
+		ID                  string      `json:"id"`
+		Input               []textInput `json:"input"`
+		ClientUserMessageID string      `json:"clientUserMessageId"`
+	} `json:"queuedSubmission"`
 }
 
 var _ provider.Provider = (*Adapter)(nil)

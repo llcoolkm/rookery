@@ -1,4 +1,4 @@
-// Package codex will implement provider.Provider through platform.Host.
-// Call identity uses harness-injected thread metadata; native submission is
-// idle-only and must revalidate the pinned process. TODO phases 2 and 3.
+// Package codex implements provider.Provider over an authenticated control socket.
+// Native delivery is idle-only, revalidates the pinned process and expiry, and
+// calls thread/queue/add without starting any command on any operating system.
 package codex

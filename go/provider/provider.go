@@ -22,7 +22,6 @@ type Capabilities struct {
 // slice disables opt-in busy delivery. Unknown providers cannot gain capability.
 // Factories must snapshot the slice so later caller mutations cannot change policy.
 type Config struct {
-	CodexExecutable  string
 	BusyDelivery     []string
 	SessionAllowlist []string
 }
@@ -56,7 +55,7 @@ const (
 
 // Provider is the single harness boundary. Identity uses trusted call metadata
 // or a pinned local ancestor, never caller-controlled tool arguments. Deliver
-// returns held only if no native I/O has occurred. Discover never enrolls.
+// returns held only when non-submission is established. Discover never enrolls.
 type Provider interface {
 	Name() string
 	Capabilities() Capabilities

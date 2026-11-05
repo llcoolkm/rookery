@@ -230,8 +230,10 @@ over host discovery, but live attached endpoints win over polling.
 Codex discovery uses loaded-thread listing plus thread/read, not persisted history;
 active with flags means waiting, active without flags busy, idle/systemError with
 canAcceptDirectInput true idle, otherwise unknown. Submission rechecks exact UUID
-and idle, then queues once. Timeout or nonzero queue exit is uncertain, successful
-queue acceptance is submitted. Claude discovery uses live `claude agents --json`
+and idle, then queues once. Python 0.3.x still invokes `codex queue` until the
+Go helper replaces it: timeout or nonzero queue exit is uncertain, successful
+queue acceptance is submitted. Go phase 2c uses the authenticated control-socket
+RPC defined below, without command execution on any OS. Claude discovery uses live `claude agents --json`
 and owned socket enrichment. Its native frame has msgV 1, msg_id, type user,
 message role user/content, priority next, exact session_id; the canonical
 cross-session-message wrapper has only from/from-name attributes, sanitizes names
@@ -461,3 +463,121 @@ revalidates both metadata and the expected live process. Record-based endpoints
 continue to require the verified record handle and `HarnessEndpoint` provenance
 rules. This exception does not authorize arbitrary endpoint paths or bypass peer
 authentication.
+
+
+## Go Codex control-socket delivery (phase 2c)
+
+Master's decision of 2026-11-05 supersedes the earlier Linux argv parity decision.
+The Go Codex provider MUST NOT invoke any command on any OS. No queue CLI,
+help probing, executable resolution, message-in-argv, stdin command delivery or
+platform-specific execution fallback is permitted. `platform.Executor` remains
+available for `claude agents --json`, but Codex delivery does not depend on it.
+Python 0.3.x remains unchanged and uses `codex queue` until the Go helper replaces
+it (`src/rookery/codex_adapter.py`, `submit`).
+
+### Verified wire protocol
+
+The upstream baseline is `openai/codex` tag `rust-v0.166.0` (tree
+`6ff1e1ca3b30fc8b914720681fcf5fe62e95f856`). Its
+[`session_queue_commands.rs:117-133`](https://github.com/openai/codex/blob/rust-v0.166.0/codex-rs/tui/src/session_queue_commands.rs#L117-L133)
+shows that `codex queue` itself calls `thread/queue/add`. The method is
+[experimental in `protocol/common.rs:646-651`](https://github.com/openai/codex/blob/rust-v0.166.0/codex-rs/app-server-protocol/src/protocol/common.rs#L646-L651).
+Use the existing authenticated WebSocket control connection, after the same
+`initialize` with `capabilities.experimentalApi: true` and `initialized`
+notification. Keep this connection open through thread revalidation and queue
+submission; do not open a separate command transport.
+
+The request is exactly the following shape. IDs and text below are illustrative
+placeholders; no actual session or message is embedded:
+
+```json
+{"id":4,"method":"thread/queue/add","params":{"threadId":"THREAD_UUID","input":[{"type":"text","text":"RENDERED_ROOKERY_MESSAGE","text_elements":[]}],"clientUserMessageId":"MESSAGE_UUID"}}
+```
+
+`ThreadQueueAddParams` requires `threadId`, `input` and `clientUserMessageId`.
+The response is:
+
+```json
+{"id":4,"result":{"queuedSubmission":{"id":"QUEUE_ITEM_ID","input":[{"type":"text","text":"RENDERED_ROOKERY_MESSAGE","text_elements":[]}],"clientUserMessageId":"MESSAGE_UUID"}}}
+```
+
+The queue item ID is an opaque string. All three `QueuedSubmission` fields are
+required. Outer fields use camelCase; the text input's `text_elements` field uses
+snake_case. These shapes are defined in
+[`protocol/v2/thread.rs:935-958`](https://github.com/openai/codex/blob/rust-v0.166.0/codex-rs/app-server-protocol/src/protocol/v2/thread.rs#L935-L958),
+[`protocol/v2/turn.rs:453-464`](https://github.com/openai/codex/blob/rust-v0.166.0/codex-rs/app-server-protocol/src/protocol/v2/turn.rs#L453-L464)
+and the generated
+[`UserInput.ts`](https://github.com/openai/codex/blob/rust-v0.166.0/codex-rs/app-server-protocol/schema/typescript/v2/UserInput.ts).
+The CLI generates a new UUIDv7 client message ID; Go supplies the canonical
+Rookery message ID as `clientUserMessageId`. This is correlation only: no server
+idempotency or deduplication guarantee is assumed. A valid acceptance response
+must match the request ID and echo the client ID and rendered input. Acceptance
+means `submitted`, never a recipient receipt or proof that a turn completed.
+
+The app server omits the `jsonrpc` version field. Error replies have shape
+`{"id":4,"error":{"code":-32600,"message":"...","data":{}}}`;
+`code` is an integer, `message` a string, and `data` optional arbitrary JSON.
+See [`rpc.rs:1-2,75-89`](https://github.com/openai/codex/blob/rust-v0.166.0/codex-rs/app-server-protocol/src/rpc.rs#L75-L89).
+[`error_code.rs:3-8`](https://github.com/openai/codex/blob/rust-v0.166.0/codex-rs/app-server/src/error_code.rs#L3-L8)
+defines invalid request `-32600`, method not found `-32601`, invalid params
+`-32602` and internal error `-32603`. Queue errors map invalid input/attachments
+and storage-invalid-request to invalid request; oversized input maps to invalid
+params with `data` containing `input_error_code: "input_too_large"`, `max_chars`
+and `actual_chars`; other queue failures map to internal error. See
+[`thread_queue_processor.rs:325-342`](https://github.com/openai/codex/blob/rust-v0.166.0/codex-rs/app-server/src/request_processors/thread_queue_processor.rs#L325-L342)
+and [`turn_processor.rs:475-484`](https://github.com/openai/codex/blob/rust-v0.166.0/codex-rs/app-server/src/request_processors/turn_processor.rs#L475-L484).
+The CLI recognizes unsupported method `-32601`, plus `-32600` with the exact
+`thread/queue/add requires experimentalApi capability` message or
+unknown-method-variant prefix;
+[`session_queue_commands.rs:177-188`](https://github.com/openai/codex/blob/rust-v0.166.0/codex-rs/tui/src/session_queue_commands.rs#L177-L188).
+The exact opt-in message is defined by
+[`experimental_api.rs:29-32`](https://github.com/openai/codex/blob/rust-v0.166.0/codex-rs/app-server-protocol/src/experimental_api.rs#L29-L32).
+Never forward upstream error text/data to the hub: it can contain private details.
+
+### Verified dispatch semantics and pre-submit checks
+
+Queue addition persists the input, then wakes a loaded thread. For an eligible,
+loaded, non-interrupted idle thread, that wake triggers an idle lifecycle callback
+which starts the head queued message with `start_turn_if_idle` and trigger
+`queue`. Busy threads retain input until a later eligible idle event. Interrupted
+threads are not woken by addition. There is no unconditional promise of immediate
+execution: an earlier queue item, interruption or idle-state race can defer the
+new input. No additional `turn/start` or `thread/queue/start` call is required for
+ordinary idle dispatch. See
+[`service.rs:265-279`](https://github.com/openai/codex/blob/rust-v0.166.0/codex-rs/ext/queue/src/service.rs#L265-L279),
+[`service.rs:405-483`](https://github.com/openai/codex/blob/rust-v0.166.0/codex-rs/ext/queue/src/service.rs#L405-L483)
+and [`service.rs:549-566`](https://github.com/openai/codex/blob/rust-v0.166.0/codex-rs/ext/queue/src/service.rs#L549-L566).
+The upstream
+[`idle_queue_dispatch_preserves_client_id` test](https://github.com/openai/codex/blob/rust-v0.166.0/codex-rs/app-server/tests/suite/v2/thread_queue.rs#L368-L406)
+checks actual idle turn start and completion after queue addition.
+
+This is the same server operation invoked by the Python baseline's queue CLI,
+so Go preserves its acceptance semantics. The RPC can also queue stored unloaded
+threads upstream; the Go adapter deliberately holds them. It retains the existing
+loaded-thread discovery, exact UUID, idle/direct-input admission, process pin,
+expiry and durable claim checks. The helper obtains and journals the claim and
+revalidates the claimed session before calling the provider; the provider checks
+the authenticated peer against that pin, reads the exact thread over the same
+connection, and rechecks process identity/expiry immediately before submission.
+A not-loaded thread is held without a queue RPC. It never resumes a thread.
+
+### Uncertainty and unverified guarantees
+
+An RPC request that was written but has no valid correlated response is
+`uncertain`, never automatically retried. A partial/failed send may also have
+reached the server, so it is conservatively uncertain. A malformed or mismatched
+acceptance response is uncertain. A valid error reply is handled conservatively:
+queue storage can commit before later server processing fails, so an error does
+not generally prove absence of acceptance. Errors after an attempted submission
+must not silently become replayable held work. Proven unsupported-method or
+experimental-opt-in rejection may be held only when rejection is established;
+otherwise retain uncertain. Failures before the queue request, including absent
+loaded identity, unverified transport/protocol, stale pin or expiry, are held.
+
+**UNVERIFIED:** compatibility with installed or other upstream versions; actual
+native Windows transport/authentication and runtime behavior; live-harness
+acceptance; a universal no-side-effects-on-error guarantee; server deduplication
+by client message ID. These gaps do not authorize guessing, command fallbacks,
+thread resume, or replay. Missing evidence before submission holds delivery;
+unknown outcomes after a possible write remain uncertain. Phase 2c tests use
+synthetic fake control servers and isolated temporary hub state only.

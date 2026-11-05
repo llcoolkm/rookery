@@ -54,7 +54,9 @@ Phase 1 requires no third-party runtime dependencies.
   Implement Linux and Windows under OS build tags in `platform/linux` and
   `platform/windows`. Platform code owns command execution and native handles.
   `Executor.Exec(ctx, Spec{Path, Args, Stdin, Timeout, MaxOutput})` supports
-  `codex queue` and `claude agents --json` with bounded output and direct native executable calls.
+  `claude agents --json` with bounded output and direct native executable calls.
+  Codex delivery uses the authenticated control-socket RPC connection exclusively;
+  its provider has no Executor dependency on any OS.
   Outcomes distinguish proven-not-started, completed and uncertain
   (may-have-started); never replay uncertain submissions. Timeout/cancellation
   or losing completion cannot imply proven-not-started.
@@ -72,7 +74,8 @@ package, including the shared platform declarations. Standard-library internals
 are excluded: portable facilities such as `context`, `time`, `encoding/json` and
 `crypto/rand` themselves transitively need OS implementation packages. This gate
 prevents project code from bypassing the platform boundary without rejecting
-normal standard-library use.
+normal standard-library use. A separate Codex provider gate rejects execution
+facilities and executable resolution, including indirect `platform.Executor` use.
 
 The Go helper uses its own private state directory. The proposed phase 2 default
 is a `rookery-go` sibling of the platform state root, overridden by
@@ -123,8 +126,16 @@ token's integrity level and AppContainer status as well as its SID; fail closed
 when these cannot be established. AppContainer support requires a separate
 reviewed policy and native acceptance tests.
 
-Execute validated native binaries without shell resolution or shell fallback.
-On Windows refuse .cmd/.bat case-insensitively and shell interpreters: cmd.exe
+Codex uses the same `thread/queue/add` RPC path on Linux and Windows, over an
+already authenticated control connection after initialize/initialized with
+experimental API opt-in. It never runs a command, probes help, resolves an
+executable, or transfers messages through argv or stdin. Missing authenticated
+transport or unverified protocol support holds delivery. Native Windows endpoint
+authentication and runtime acceptance remain phase 3 work.
+
+For remaining command consumers, execute validated native binaries without shell
+resolution or shell fallback. On Windows refuse .cmd/.bat case-insensitively and
+shell interpreters: cmd.exe
 parses argv even when the caller intended direct execution (BatBadBut). Peer
 text must never enter argv on Windows, both because of parsing and the
 32767-character command-line limit. Use stdin or an owner-only private file.
@@ -225,17 +236,22 @@ execution on hosted runners and the live-server procedure below are unverified.
 - **Native acceptance is outstanding.** Synthetic socket protocols and local hub
   compatibility do not prove compatibility with any installed harness version,
   actual busy-turn behavior, real restart/reconnect behavior, or WSL startup.
-- **Codex input exposure on Linux.** Go prefers advertised `--message-stdin`.
-  Baseline builds use `queue --message` argv for Python parity on Linux only;
-  message text is visible to local process inspection and possibly audit logs.
-  Windows requires stdin/private-file support and otherwise holds delivery.
+- **Codex delivery protocol.** Phase 2c replaces command delivery with the
+  experimental `thread/queue/add` control-socket RPC verified against upstream
+  `rust-v0.166.0`; see [the exact contract](contract.md#go-codex-control-socket-delivery-phase-2c).
+  Linux and Windows share this path, with no command fallback. Python 0.3.x
+  still uses `codex queue` until the Go helper replaces it. The obsolete Go
+  `configure --executable` option is rejected; existing `codex_executable`
+  configuration values are ignored. Installed-harness
+  compatibility and native Windows operation remain UNVERIFIED.
 - **Claude needs a verified socket record.** Go uses the verified owned
   `sessions/<pid>.json` record and its `messagingSocketPath`; it does not guess a
   socket when that record/address is absent. Missing evidence prevents push.
-- **Native executable requirement.** Linux execution requires a native ELF
-  executable; npm/shebang launchers and shell fallbacks are refused. Codex resolves the npm package vendor binary without executing the shim, or
-  uses an absolute native path supplied with `configure --executable`. Native packaging must be validated
-  on the acceptance host.
+- **Native executable requirement for command consumers.** Linux execution
+  requires a native ELF executable; npm/shebang launchers and shell fallbacks
+  are refused. This applies to Claude discovery and installation commands;
+  Codex delivery neither resolves nor executes a binary. Native packaging
+  must be validated on the acceptance host.
 - **Installer differences.** The Go server is named `rookery-go`; it never queries or changes `rookery`. Existing `rookery-go` entries are preserved. Claude's text
   listing cannot prove exact argv boundaries. Existing provider settings must be
   private; Python can preserve broader existing modes. Go supplies an old-tool
@@ -270,8 +286,8 @@ locally without saving them to the public repository or transcript:
 local `GO_SESSION`/`PY_SESSION` addresses. Select Codex for one session and Claude
 for the other, then repeat with the Go recipient on the other provider. Before
 push testing, establish that the native binaries and socket records meet the
-constraints above; record whether Codex uses stdin or Linux argv exposure. An unsupported Codex build is a recorded held
-outcome, not a passed push gate.
+constraints above; verify the authenticated Codex `thread/queue/add` route.
+An unsupported Codex build is a recorded held outcome, not a passed push gate.
 
 Create two fresh test-node credentials locally with `umask 077` and
 `secrets.token_urlsafe(32)`; write each to its own 0600 `GO_TOKEN_FILE` or
@@ -427,7 +443,21 @@ success is not native Windows runtime evidence. No live acceptance was run.
 
 The acceptance procedure additionally requires a disposable OS account because
 Python discovery is host-wide. Go discovery requires explicit configured session
-IDs during coexistence. The Linux Codex argv fallback deliberately retains the
-Python baseline's local process/audit exposure. Post-rename directory-fsync
-failure reports local admission as queued, while native attempt journaling
+IDs during coexistence. Phase 2c supersedes the earlier Linux command-delivery
+decision: Codex delivery uses RPC on every OS and never invokes a command.
+Python 0.3.x retains `codex queue` until replacement by the Go helper.
+Post-rename directory-fsync failure reports local admission as queued, while native attempt journaling
 continues to fail closed. No review recommendation was rejected.
+
+
+### Phase 2c verification
+
+The phase 2c candidate passed all 310 Python tests, `go vet ./...`,
+`go test ./...` including isolated Python-hub integration, `go test -race ./...`,
+Linux and Windows builds, the portable OS-import gate for both targets, the Codex
+command-dependency AST test, whitespace validation and an added-line privacy
+grep. Fake authenticated control-socket tests cover queue acceptance, error
+responses, connection loss after request write (uncertain), and an unloaded
+thread (held without queue submission). No live hub, live sessions or real
+credentials were used. Windows runtime and installed-harness acceptance remain
+UNVERIFIED; cross-build success does not establish them.

@@ -142,15 +142,11 @@ func runPlatform(ctx context.Context, args []string) (any, error) {
 			}
 			c.BusyDelivery = old.BusyDelivery
 			c.SessionAllowlist = old.SessionAllowlist
-			c.CodexExecutable = old.CodexExecutable
 		} else if !errors.Is(e, fs.ErrNotExist) {
 			return nil, errors.New("invalid private configuration")
 		}
-		if executable, exists := a.options["executable"]; exists {
-			if !filepath.IsAbs(executable) {
-				return nil, errors.New("--executable must be an absolute native Codex binary path")
-			}
-			c.CodexExecutable = executable
+		if _, exists := a.options["executable"]; exists {
+			return nil, errors.New("configure --executable is obsolete; Codex delivery uses its control socket")
 		}
 		if raw, exists := a.options["session-allowlist"]; exists {
 			c.SessionAllowlist = []string{}
@@ -213,7 +209,7 @@ func runPlatform(ctx context.Context, args []string) (any, error) {
 	if a.command == "daemon" && allowlist == nil {
 		allowlist = []string{}
 	}
-	registry := helper.NewRegistry(provider.Config{BusyDelivery: config.BusyDelivery, SessionAllowlist: allowlist, CodexExecutable: config.CodexExecutable}, h)
+	registry := helper.NewRegistry(provider.Config{BusyDelivery: config.BusyDelivery, SessionAllowlist: allowlist}, h)
 	actor := a.options["as"]
 	if actor == "" {
 		actor = os.Getenv("ROOKERY_SESSION")

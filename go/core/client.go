@@ -62,7 +62,6 @@ func Qualify(actor, node string) (string, error) {
 }
 
 type Config struct {
-	CodexExecutable  string   `json:"codex_executable"`
 	Node             string   `json:"node"`
 	URL              string   `json:"url"`
 	Token            string   `json:"token"`

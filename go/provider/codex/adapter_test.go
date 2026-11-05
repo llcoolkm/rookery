@@ -5,10 +5,10 @@ import (
 	"context"
 	"crypto/sha1"
 	"encoding/base64"
-	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"io"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -22,15 +22,29 @@ const testID = "00000000-0000-4000-8000-000000000001"
 
 var testPin = platform.ProcessRef{PID: 42, Principal: "test", Start: "1", BootID: "test"}
 
+type rpcRequest struct {
+	ID     int             `json:"id"`
+	Method string          `json:"method"`
+	Params json.RawMessage `json:"params"`
+}
+
 type fakeConn struct {
-	buffer    bytes.Buffer
-	state     string
-	methods   *[]string
-	deadlines *[]time.Time
+	buffer      bytes.Buffer
+	state       string
+	queueMode   string
+	requests    *[]rpcRequest
+	deadlines   *[]time.Time
+	onRead      func()
+	initialized bool
+	ready       bool
+	closed      bool
 }
 
 func (c *fakeConn) Read(b []byte) (int, error) { return c.buffer.Read(b) }
 func (c *fakeConn) Write(b []byte) (int, error) {
+	if c.closed {
+		return 0, io.ErrClosedPipe
+	}
 	n := len(b)
 	if bytes.HasPrefix(b, []byte("GET ")) {
 		for _, line := range strings.Split(string(b), "\r\n") {
@@ -44,11 +58,9 @@ func (c *fakeConn) Write(b []byte) (int, error) {
 	length := int(b[1] & 127)
 	offset := 2
 	if length == 126 {
-		length = int(binary.BigEndian.Uint16(b[2:4]))
 		offset = 4
 	}
 	if length == 127 {
-		length = int(binary.BigEndian.Uint64(b[2:10]))
 		offset = 10
 	}
 	mask := b[offset : offset+4]
@@ -56,23 +68,81 @@ func (c *fakeConn) Write(b []byte) (int, error) {
 	for i := range p {
 		p[i] ^= mask[i%4]
 	}
-	var req struct {
-		ID     int    `json:"id"`
-		Method string `json:"method"`
-	}
+	var req rpcRequest
 	if json.Unmarshal(p, &req) != nil {
 		return 0, errors.New("bad request")
 	}
-	*c.methods = append(*c.methods, req.Method)
-	if req.ID == 0 {
-		return n, nil
-	}
+	*c.requests = append(*c.requests, req)
 	var result any = map[string]any{}
 	switch req.Method {
+	case "initialize":
+		var params struct {
+			Capabilities struct {
+				ExperimentalAPI bool `json:"experimentalApi"`
+			} `json:"capabilities"`
+		}
+		if json.Unmarshal(req.Params, &params) != nil || !params.Capabilities.ExperimentalAPI {
+			return 0, errors.New("experimental opt-in required")
+		}
+		c.initialized = true
+	case "initialized":
+		if !c.initialized || req.ID != 0 {
+			return 0, errors.New("initialization order invalid")
+		}
+		c.ready = true
+		return n, nil
 	case "thread/loaded/list":
+		if !c.ready {
+			return 0, errors.New("not initialized")
+		}
 		result = map[string]any{"data": []string{testID}, "nextCursor": nil}
 	case "thread/read":
+		if !c.ready {
+			return 0, errors.New("not initialized")
+		}
 		result = map[string]any{"thread": map[string]any{"id": testID, "name": "synthetic", "status": map[string]any{"type": c.state}, "canAcceptDirectInput": true}}
+		if c.onRead != nil {
+			c.onRead()
+		}
+	case "thread/queue/add":
+		if !c.ready {
+			return 0, errors.New("not initialized")
+		}
+		var params map[string]json.RawMessage
+		if json.Unmarshal(req.Params, &params) != nil {
+			return 0, errors.New("invalid queue parameters")
+		}
+		switch c.queueMode {
+		case "lost":
+			return n, nil
+		case "partial-write":
+			return n / 2, io.ErrClosedPipe
+		case "error", "unsupported", "experimental", "opt-in-rejected":
+			code := -32603
+			if c.queueMode == "unsupported" {
+				code = -32601
+			}
+			if c.queueMode == "experimental" || c.queueMode == "opt-in-rejected" {
+				code = -32600
+			}
+			remoteMessage := "synthetic private remote detail"
+			if c.queueMode == "opt-in-rejected" {
+				remoteMessage = "thread/queue/add requires experimentalApi capability"
+			}
+			response, _ := json.Marshal(map[string]any{"id": req.ID, "error": map[string]any{"code": code, "message": remoteMessage, "data": map[string]any{"synthetic": true}}})
+			c.enqueue(response)
+			return n, nil
+		case "malformed":
+			result = map[string]any{"queuedSubmission": map[string]any{"id": "synthetic-queue"}}
+		default:
+			clientID := params["clientUserMessageId"]
+			if c.queueMode == "mismatched" {
+				clientID = json.RawMessage(`"different"`)
+			}
+			result = map[string]any{"queuedSubmission": map[string]any{"id": "synthetic-queue", "input": params["input"], "clientUserMessageId": clientID}}
+		}
+	default:
+		return 0, errors.New("unexpected method")
 	}
 	// An approval request may legitimately share our ID. It must be ignored.
 	notice, _ := json.Marshal(map[string]any{"id": req.ID, "method": "approval/request", "params": map[string]any{}})
@@ -90,7 +160,7 @@ func (c *fakeConn) enqueue(p []byte) {
 	}
 	c.buffer.Write(p)
 }
-func (*fakeConn) Close() error { return nil }
+func (c *fakeConn) Close() error { c.closed = true; return nil }
 func (c *fakeConn) SetDeadline(at time.Time) error {
 	if c.deadlines != nil {
 		*c.deadlines = append(*c.deadlines, at)
@@ -103,15 +173,26 @@ func (*fakeConn) Peer() (platform.ProcessRef, error) { return testPin, nil }
 
 type fakeIPC struct {
 	state     string
-	methods   []string
+	queueMode string
+	requests  []rpcRequest
 	deadlines []time.Time
+	onRead    func()
 }
 
 func (f *fakeIPC) Dial(context.Context, platform.Endpoint) (platform.Connection, error) {
-	return &fakeConn{state: f.state, methods: &f.methods, deadlines: &f.deadlines}, nil
+	return &fakeConn{state: f.state, queueMode: f.queueMode, requests: &f.requests, deadlines: &f.deadlines, onRead: f.onRead}, nil
 }
 func (*fakeIPC) Listen(context.Context, platform.Endpoint) (platform.Listener, error) {
 	return nil, errors.New("unsupported")
+}
+func (f *fakeIPC) queueCount() int {
+	n := 0
+	for _, req := range f.requests {
+		if req.Method == "thread/queue/add" {
+			n++
+		}
+	}
+	return n
 }
 
 type fakeProcess struct{ changed bool }
@@ -131,100 +212,131 @@ func (*fakeProcess) CommandLine(context.Context, platform.ProcessRef) ([]string,
 	return nil, nil
 }
 
-type fakeExec struct {
-	linuxArgv bool
-	help      string
-	state     platform.ExecState
-	code      int
-	specs     []platform.Spec
-}
-
-func (e *fakeExec) LinuxMessageArgv() bool { return e.linuxArgv }
-func (e *fakeExec) Exec(_ context.Context, s platform.Spec) (platform.ExecResult, error) {
-	e.specs = append(e.specs, s)
-	if len(s.Args) > 1 && s.Args[1] == "--help" {
-		return platform.ExecResult{State: platform.Completed, Stdout: []byte(e.help)}, nil
-	}
-	return platform.ExecResult{State: e.state, ExitCode: e.code}, nil
-}
-func fixture(t *testing.T) (*Adapter, *fakeIPC, *fakeExec, *fakeProcess, core.Session) {
+func fixture(t *testing.T) (*Adapter, *fakeIPC, *fakeProcess, core.Session) {
 	t.Helper()
 	ipc := &fakeIPC{state: "idle"}
-	exec := &fakeExec{help: "  --message-stdin Read from standard input\n", state: platform.Completed}
 	process := &fakeProcess{}
-	a, _ := NewWithOptions(provider.Config{}, platform.Host{IPC: ipc, Exec: exec, Process: process}, Options{Executable: "/synthetic/codex", Endpoint: "issued"})
+	a, _ := NewWithOptions(provider.Config{}, platform.Host{IPC: ipc, Process: process}, Options{Endpoint: "issued"})
 	sessions, err := a.Discover(context.Background())
 	if err != nil || len(sessions) != 1 {
 		t.Fatalf("discover: %v", err)
 	}
-	return a, ipc, exec, process, sessions[0]
+	return a, ipc, process, sessions[0]
 }
 func message() core.Message {
 	return core.Message{ID: testID, Sender: "alpha/claude:" + testID, Kind: core.Ask, Body: "sensitive $(never-execute)", Expires: float64(time.Now().Add(time.Hour).Unix())}
 }
-func TestDiscoveryAndPrivateSubmission(t *testing.T) {
-	a, ipc, exec, _, s := fixture(t)
+func TestDiscoveryAndRPCSubmission(t *testing.T) {
+	a, ipc, _, s := fixture(t)
 	if s.Status != "idle" || s.PID != testPin.PID {
 		t.Fatal(s)
 	}
-	result, err := a.Deliver(context.Background(), s, message())
+	m := message()
+	result, err := a.Deliver(context.Background(), s, m)
 	if err != nil || result.Status != "submitted" {
 		t.Fatal(result, err)
 	}
-	if len(exec.specs) != 2 {
-		t.Fatal("missing help probe or submission")
+	wantMethods := []string{"initialize", "initialized", "thread/loaded/list", "thread/read", "initialize", "initialized", "thread/read", "thread/queue/add"}
+	if len(ipc.requests) != len(wantMethods) {
+		t.Fatal(ipc.requests)
 	}
-	queued := exec.specs[1]
-	if !bytes.Contains(queued.Stdin, []byte("sensitive")) {
-		t.Fatal("stdin lost body")
-	}
-	for _, v := range queued.Args {
-		if strings.Contains(v, "sensitive") {
-			t.Fatal("body exposed in argv")
+	for i, want := range wantMethods {
+		if ipc.requests[i].Method != want {
+			t.Fatal(ipc.requests)
 		}
 	}
-	for _, method := range ipc.methods {
-		if method == "thread/list" || method == "approval/response" {
-			t.Fatal("unsafe method", method)
-		}
+	var got map[string]any
+	if json.Unmarshal(ipc.requests[len(ipc.requests)-1].Params, &got) != nil {
+		t.Fatal("invalid queue params")
+	}
+	want := map[string]any{"threadId": testID, "clientUserMessageId": m.ID, "input": []any{map[string]any{"type": "text", "text": core.Render(m), "text_elements": []any{}}}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("wrong queue parameters: %#v", got)
 	}
 }
-func TestNoPrivateInputSupportNeverQueues(t *testing.T) {
-	a, _, exec, _, s := fixture(t)
-	exec.help = "--message TEXT"
-	result, _ := a.Deliver(context.Background(), s, message())
-	if result.Status != "held" || len(exec.specs) != 1 {
-		t.Fatal(result, exec.specs)
+
+func TestDeliveryRefusesChangedIdentityAndNonIdle(t *testing.T) {
+	for _, state := range []string{"active", "notLoaded", "unknown"} {
+		t.Run(state, func(t *testing.T) {
+			a, ipc, _, s := fixture(t)
+			ipc.state = state
+			result, _ := a.Deliver(context.Background(), s, message())
+			if result.Status != "held" || ipc.queueCount() != 0 {
+				t.Fatal(result, ipc.requests)
+			}
+		})
 	}
-}
-func TestDeliveryRefusesChangedIdentityAndBusy(t *testing.T) {
-	a, ipc, exec, process, s := fixture(t)
-	ipc.state = "active"
-	result, _ := a.Deliver(context.Background(), s, message())
-	if result.Status != "held" || len(exec.specs) != 0 {
-		t.Fatal(result)
-	}
+	a, ipc, process, s := fixture(t)
 	process.changed = true
-	result, _ = a.Deliver(context.Background(), s, message())
-	if result.Status != "held" {
+	result, _ := a.Deliver(context.Background(), s, message())
+	if result.Status != "held" || ipc.queueCount() != 0 {
 		t.Fatal(result)
 	}
 }
-func TestQueueUnknownOutcomeNeverHeld(t *testing.T) {
-	for _, tc := range []struct {
-		state platform.ExecState
-		code  int
-		want  string
-	}{{platform.Uncertain, 0, "uncertain"}, {platform.Completed, 1, "uncertain"}, {platform.NotStarted, 0, "failed"}} {
-		a, _, exec, _, s := fixture(t)
-		exec.state = tc.state
-		exec.code = tc.code
-		result, _ := a.Deliver(context.Background(), s, message())
-		if result.Status != tc.want {
+
+func TestFinalPinRevalidation(t *testing.T) {
+	a, ipc, process, s := fixture(t)
+	ipc.onRead = func() { process.changed = true }
+	result, _ := a.Deliver(context.Background(), s, message())
+	if result.Status != "held" || ipc.queueCount() != 0 {
+		t.Fatal(result, ipc.requests)
+	}
+}
+
+func TestExpiredAndPollingNeverSubmit(t *testing.T) {
+	for _, polling := range []bool{false, true} {
+		a, ipc, _, s := fixture(t)
+		m := message()
+		if polling {
+			s.Delivery = "polling"
+		} else {
+			m.Expires = 0
+		}
+		result, _ := a.Deliver(context.Background(), s, m)
+		if result.Status != "held" || ipc.queueCount() != 0 {
 			t.Fatal(result)
 		}
 	}
 }
+
+func TestQueueUnknownOutcomeNeverRetries(t *testing.T) {
+	for _, mode := range []string{"error", "experimental", "lost", "partial-write", "malformed", "mismatched"} {
+		t.Run(mode, func(t *testing.T) {
+			a, ipc, _, s := fixture(t)
+			ipc.queueMode = mode
+			result, err := a.Deliver(context.Background(), s, message())
+			if err != nil || result.Status != "uncertain" || ipc.queueCount() != 1 {
+				t.Fatal(result, err, ipc.requests)
+			}
+			if strings.Contains(result.Detail, "private remote detail") {
+				t.Fatal("untrusted remote error leaked")
+			}
+		})
+	}
+}
+
+func TestUnsupportedQueueHeld(t *testing.T) {
+	for _, mode := range []string{"unsupported", "opt-in-rejected"} {
+		a, ipc, _, s := fixture(t)
+		ipc.queueMode = mode
+		result, err := a.Deliver(context.Background(), s, message())
+		if err != nil || result.Status != "held" || ipc.queueCount() != 1 {
+			t.Fatal(result, err, ipc.requests)
+		}
+	}
+}
+
+func TestCancelledBeforeSubmissionHeld(t *testing.T) {
+	a, ipc, _, s := fixture(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ipc.onRead = cancel
+	result, err := a.Deliver(ctx, s, message())
+	if err != nil || result.Status != "held" || ipc.queueCount() != 0 {
+		t.Fatal(result, err, ipc.requests)
+	}
+}
+
 func TestIdentityRejectsConflicts(t *testing.T) {
 	a, _ := New(provider.Config{}, platform.Host{})
 	for _, m := range []core.CallMetadata{nil, {"threadId": json.RawMessage(`"` + testID + `"`), "sessionId": json.RawMessage(`"different"`)}, {"threadId": json.RawMessage(`"` + testID + `"`), "x-codex-turn-metadata": json.RawMessage(`{"session_id":"different"}`)}} {
@@ -260,12 +372,12 @@ func TestNormalizeStates(t *testing.T) {
 var _ io.ReadWriteCloser = (*fakeConn)(nil)
 
 func TestRediscoveryCannotReplaceClaimProcessPin(t *testing.T) {
-	adapter, _, exec, _, session := fixture(t)
+	adapter, ipc, _, session := fixture(t)
 	changed := testPin
 	changed.Start = "reused"
 	adapter.pins[session.ID] = changed
 	result, _ := adapter.Deliver(context.Background(), session, message())
-	if result.Status != "held" || len(exec.specs) != 0 {
+	if result.Status != "held" || ipc.queueCount() != 0 {
 		t.Fatal("rediscovery replaced the captured process pin", result)
 	}
 	encoded, err := json.Marshal(session)
@@ -274,38 +386,18 @@ func TestRediscoveryCannotReplaceClaimProcessPin(t *testing.T) {
 	}
 }
 
-func TestLinuxArgvFallbackAndMissingRoute(t *testing.T) {
-	a, _, exec, _, session := fixture(t)
-	exec.help = "--message TEXT"
-	exec.linuxArgv = true
-	result, _ := a.Deliver(context.Background(), session, message())
-	if result.Status != "submitted" || len(exec.specs) != 2 {
-		t.Fatal(result, exec.specs)
-	}
-	queued := exec.specs[1]
-	if len(queued.Stdin) != 0 || queued.Args[3] != "--message" || !strings.Contains(queued.Args[4], "sensitive") {
-		t.Fatal("Linux fallback lost argv message")
-	}
-	a, _, exec, _, session = fixture(t)
-	exec.linuxArgv = true
-	exec.help = "--other"
-	result, _ = a.Deliver(context.Background(), session, message())
-	if result.Status != "held" || len(exec.specs) != 1 {
-		t.Fatal(result)
-	}
-}
 func TestEmptyAllowlistDoesNotConnect(t *testing.T) {
-	a, ipc, _, _, _ := fixture(t)
+	a, ipc, _, _ := fixture(t)
 	a.config.SessionAllowlist = []string{}
-	ipc.methods = nil
+	ipc.requests = nil
 	rows, err := a.Discover(context.Background())
-	if err != nil || len(rows) != 0 || len(ipc.methods) != 0 {
-		t.Fatal(rows, err, ipc.methods)
+	if err != nil || len(rows) != 0 || len(ipc.requests) != 0 {
+		t.Fatal(rows, err, ipc.requests)
 	}
 }
 
 func TestDeadlinesResetForEveryCall(t *testing.T) {
-	a, ipc, _, _, _ := fixture(t)
+	a, ipc, _, _ := fixture(t)
 	// Handshake deadline, initialize, loaded/list and thread/read each refresh it.
 	if len(ipc.deadlines) != 4 {
 		t.Fatal("per-call deadline missing", len(ipc.deadlines))
