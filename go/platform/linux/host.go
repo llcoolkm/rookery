@@ -142,6 +142,9 @@ func (p *paths) HarnessEndpoint(ctx context.Context, provider string, record pla
 	if e != nil || !live || real.root != root {
 		return "", errUnsafe
 	}
+	if e = recordProvenance(real); e != nil {
+		return "", e
+	}
 	var st syscall.Stat_t
 	if syscall.Fstat(int(real.Fd()), &st) != nil || !safeStat(&st, true, false) || st.Nlink != 1 {
 		return "", errUnsafe

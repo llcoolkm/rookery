@@ -388,3 +388,37 @@ func TestAtomicExclusiveNeverReplacesBackup(t *testing.T) {
 		t.Fatal("replaced backup symlink")
 	}
 }
+
+func TestHarnessRecordProvenanceRevalidatedAfterOpen(t *testing.T) {
+	host, root := testHost(t)
+	ctx := context.Background()
+	t.Setenv("CLAUDE_CONFIG_DIR", root)
+	socket := filepath.Join(root, "native.sock")
+	l, e := net.ListenUnix("unix", &net.UnixAddr{Name: socket, Net: "unix"})
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer l.Close()
+	os.Chmod(socket, 0600)
+	if e = host.Files.AtomicWrite(ctx, root, "record.json", []byte("original")); e != nil {
+		t.Fatal(e)
+	}
+	record, e := host.Files.OpenNoFollow(ctx, root, "record.json", false)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer record.Close()
+	if e = os.Rename(filepath.Join(root, "record.json"), filepath.Join(root, "moved.json")); e != nil {
+		t.Fatal(e)
+	}
+	if e = host.Files.AtomicWrite(ctx, root, "record.json", []byte("replacement")); e != nil {
+		t.Fatal(e)
+	}
+	ref, e := host.Process.Current(ctx)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if _, e = host.Paths.HarnessEndpoint(ctx, "claude", record, socket, ref); e == nil {
+		t.Fatal("accepted moved and replaced provenance record")
+	}
+}

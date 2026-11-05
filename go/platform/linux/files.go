@@ -39,8 +39,9 @@ type files struct {
 }
 type verifiedFile struct {
 	*os.File
-	host *files
-	root string
+	host     *files
+	root     string
+	relative string
 }
 
 func (f *verifiedFile) Close() error {
@@ -189,6 +190,12 @@ func (f *files) OpenNoFollow(ctx context.Context, root, name string, create bool
 		return nil, e
 	}
 	defer syscall.Close(fd)
+	if create {
+		var directory syscall.Stat_t
+		if syscall.Fstat(fd, &directory) != nil || !safeStat(&directory, true, true) {
+			return nil, errUnsafe
+		}
+	}
 	flags := syscall.O_RDWR | syscall.O_CLOEXEC | syscall.O_NOFOLLOW | syscall.O_NONBLOCK
 	if create {
 		flags |= syscall.O_CREAT
@@ -205,7 +212,7 @@ func (f *files) OpenNoFollow(ctx context.Context, root, name string, create bool
 		syscall.Close(n)
 		return nil, errUnsafe
 	}
-	v := &verifiedFile{File: os.NewFile(uintptr(n), base), host: f, root: root}
+	v := &verifiedFile{File: os.NewFile(uintptr(n), base), host: f, root: root, relative: name}
 	f.mu.Lock()
 	f.opened[v] = true
 	f.mu.Unlock()
@@ -223,6 +230,10 @@ func (f *files) AtomicWrite(ctx context.Context, root, name string, data []byte)
 		return e
 	}
 	defer syscall.Close(fd)
+	var directory syscall.Stat_t
+	if syscall.Fstat(fd, &directory) != nil || !safeStat(&directory, true, true) {
+		return errUnsafe
+	}
 	// Refuse an existing unsafe destination before replacement.
 	old, e := syscall.Openat(fd, base, syscall.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC|syscall.O_NONBLOCK, 0)
 	if e == nil {
@@ -403,12 +414,32 @@ func (f *files) AtomicWriteExclusive(ctx context.Context, root, name string, dat
 	_, _, errno := syscall.Syscall6(syscall.SYS_LINKAT, uintptr(fd), uintptr(unsafe.Pointer(source)), uintptr(fd), uintptr(unsafe.Pointer(target)), 0, 0)
 	if errno != 0 {
 		if errno == syscall.EEXIST {
-			return errors.New("backup already exists")
+			return fs.ErrExist
 		}
 		return errors.New("local storage unavailable")
 	}
 	if syscall.Unlinkat(fd, tmp) != nil || syscall.Fsync(fd) != nil {
 		return errors.New("local storage unavailable")
+	}
+	return nil
+}
+
+// recordProvenance revalidates the handle's original pathname by descriptor,
+// rejecting renamed, replaced or symlinked records and changed ancestry.
+func recordProvenance(record *verifiedFile) error {
+	fd, base, e := parentOpen(record.root, record.relative)
+	if e != nil {
+		return e
+	}
+	defer syscall.Close(fd)
+	pathFD, e := syscall.Openat(fd, base, 0x200000|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
+	if e != nil {
+		return errUnsafe
+	}
+	defer syscall.Close(pathFD)
+	var original, current syscall.Stat_t
+	if syscall.Fstat(int(record.Fd()), &original) != nil || syscall.Fstat(pathFD, &current) != nil || original.Dev != current.Dev || original.Ino != current.Ino || current.Mode&syscall.S_IFMT != syscall.S_IFREG || !safeStat(&current, true, false) || current.Nlink != 1 {
+		return errUnsafe
 	}
 	return nil
 }
