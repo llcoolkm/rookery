@@ -361,3 +361,30 @@ func TestWSLInstallReportsIncompleteBootIntegration(t *testing.T) {
 		t.Fatal("WSL status hid incomplete startup integration")
 	}
 }
+
+func TestAtomicExclusiveNeverReplacesBackup(t *testing.T) {
+	host, root := testHost(t)
+	ctx := context.Background()
+	files := host.Files.(interface {
+		AtomicWriteExclusive(context.Context, string, string, []byte) error
+	})
+	if e := files.AtomicWriteExclusive(ctx, root, "backup", []byte("original")); e != nil {
+		t.Fatal(e)
+	}
+	if e := files.AtomicWriteExclusive(ctx, root, "backup", []byte("replacement")); e == nil {
+		t.Fatal("replaced an existing backup")
+	}
+	f, e := host.Files.OpenNoFollow(ctx, root, "backup", false)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer f.Close()
+	data, e := io.ReadAll(f)
+	if e != nil || string(data) != "original" {
+		t.Fatal("lost original backup")
+	}
+	os.Symlink("backup", filepath.Join(root, "link"))
+	if e := files.AtomicWriteExclusive(ctx, root, "link", nil); e == nil {
+		t.Fatal("replaced backup symlink")
+	}
+}

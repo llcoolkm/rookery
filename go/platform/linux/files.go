@@ -15,6 +15,7 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"unsafe"
 
 	"github.com/llcoolkm/rookery/go/platform"
 )
@@ -352,3 +353,62 @@ func (f *files) AdvisoryLock(ctx context.Context, root, name string, wait bool) 
 }
 
 var _ io.ReadWriteSeeker = (*verifiedFile)(nil)
+
+// AtomicWriteExclusive commits a complete private file only if the destination
+// does not exist. linkat is the atomic exclusive commit: an earlier backup is
+// never replaced, including when another process races backup creation.
+func (f *files) AtomicWriteExclusive(ctx context.Context, root, name string, data []byte) error {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	fd, base, e := parentOpen(root, name)
+	if e != nil {
+		return e
+	}
+	defer syscall.Close(fd)
+	var directory syscall.Stat_t
+	if syscall.Fstat(fd, &directory) != nil || !safeStat(&directory, true, true) {
+		return errUnsafe
+	}
+	var random [16]byte
+	if _, e = rand.Read(random[:]); e != nil {
+		return errors.New("local storage unavailable")
+	}
+	tmp := ".write-" + hex.EncodeToString(random[:])
+	n, e := syscall.Openat(fd, tmp, syscall.O_WRONLY|syscall.O_CREAT|syscall.O_EXCL|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0600)
+	if e != nil {
+		return errUnsafe
+	}
+	defer syscall.Unlinkat(fd, tmp)
+	out := os.NewFile(uintptr(n), tmp)
+	_, e = out.Write(data)
+	if e == nil {
+		e = out.Sync()
+	}
+	closeError := out.Close()
+	if e == nil {
+		e = closeError
+	}
+	if e != nil {
+		return errors.New("local storage unavailable")
+	}
+	source, e := syscall.BytePtrFromString(tmp)
+	if e != nil {
+		return errUnsafe
+	}
+	target, e := syscall.BytePtrFromString(base)
+	if e != nil {
+		return errUnsafe
+	}
+	_, _, errno := syscall.Syscall6(syscall.SYS_LINKAT, uintptr(fd), uintptr(unsafe.Pointer(source)), uintptr(fd), uintptr(unsafe.Pointer(target)), 0, 0)
+	if errno != 0 {
+		if errno == syscall.EEXIST {
+			return errors.New("backup already exists")
+		}
+		return errors.New("local storage unavailable")
+	}
+	if syscall.Unlinkat(fd, tmp) != nil || syscall.Fsync(fd) != nil {
+		return errors.New("local storage unavailable")
+	}
+	return nil
+}
