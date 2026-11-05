@@ -73,6 +73,11 @@ jobs:
         with:
           go-version-file: go/go.mod
           cache: false
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        if: runner.os == 'Linux'
+        with:
+          version: '0.10.9'
+          python-version: '3.12'
       - name: Enforce portable core and providers
         run: |
           # Inspect imports of every reachable project package. The standard
@@ -84,7 +89,11 @@ jobs:
             exit 1
           fi
       - run: go vet ./...
-      - run: go test ./...
+      - name: Test Go and isolated Python hub integration
+        run: go test ./...
+      - name: Race detector including isolated integration
+        if: runner.os == 'Linux'
+        run: go test -race ./...
       - name: Build for Windows
         run: GOOS=windows go build ./...
       - name: Build for Linux
