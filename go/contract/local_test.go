@@ -1,4 +1,4 @@
-//go:build linux
+//go:build linux || windows
 
 package contract_test
 
@@ -12,7 +12,6 @@ import (
 	"testing"
 
 	"github.com/llcoolkm/rookery/go/core"
-	hostlinux "github.com/llcoolkm/rookery/go/platform/linux"
 )
 
 type retryVectorHub struct {
@@ -67,7 +66,7 @@ func TestLocalCommandAdmissionAndReopenVectors(t *testing.T) {
 			if e := os.Chmod(temp, 0700); e != nil {
 				t.Fatal(e)
 			}
-			host, e := hostlinux.New(filepath.Join(temp, "state"))
+			host, e := newTestHost(filepath.Join(temp, "state"))
 			if e != nil {
 				t.Fatal(e)
 			}

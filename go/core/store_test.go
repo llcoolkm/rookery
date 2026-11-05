@@ -1,4 +1,4 @@
-//go:build linux
+//go:build linux || windows
 
 package core_test
 
@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"github.com/llcoolkm/rookery/go/core"
 	"github.com/llcoolkm/rookery/go/platform"
-	hostlinux "github.com/llcoolkm/rookery/go/platform/linux"
 	"os"
 	"path/filepath"
 	"sync"
@@ -24,7 +23,7 @@ func newStore(t *testing.T) *core.LocalStore {
 	if e := os.Chmod(temp, 0700); e != nil {
 		t.Fatal(e)
 	}
-	host, e := hostlinux.New(filepath.Join(temp, "state"))
+	host, e := newTestHost(filepath.Join(temp, "state"))
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -255,5 +254,74 @@ func TestAdmissionAfterRenameFailureRemainsQueuedButClaimFailsClosed(t *testing.
 	}
 	if err := s.StartAttempt(context.Background(), messageID, claimID); !errors.Is(err, platform.ErrCommittedNotDurable) {
 		t.Fatal("undurable native journal permitted submission", err)
+	}
+}
+
+// Separate host/store instances must serialize through native file locks rather
+// than a Go mutex. Readers must always see whole, monotonic admitted snapshots.
+func TestConcurrentIndependentStoresSeeAtomicSnapshots(t *testing.T) {
+	first := newStore(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	host, err := newTestHost(first.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := core.NewLocalStore(ctx, host.Files, first.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		for i := 0; i < 24; i++ {
+			id, e := core.NewRequestID(time.Now())
+			if e != nil {
+				done <- e
+				return
+			}
+			raw, e := json.Marshal(map[string]any{"_request_id": id, "number": i})
+			if e != nil {
+				done <- e
+				return
+			}
+			store := first
+			if i%2 == 1 {
+				store = second
+			}
+			if e = store.Admit(ctx, core.Command{ID: id, Op: "ack", Data: raw}); e != nil {
+				done <- e
+				return
+			}
+		}
+		done <- nil
+	}()
+	previous := 0
+	for {
+		rows, e := second.Commands(ctx, 100)
+		if e != nil {
+			t.Fatal(e)
+		}
+		if len(rows) < previous {
+			t.Fatal("concurrent snapshot lost admitted commands")
+		}
+		previous = len(rows)
+		for _, row := range rows {
+			var data map[string]any
+			if json.Unmarshal(row.Data, &data) != nil || data["_request_id"] != row.ID {
+				t.Fatal("partial concurrent snapshot")
+			}
+		}
+		select {
+		case e := <-done:
+			if e != nil {
+				t.Fatal(e)
+			}
+			rows, e = first.Commands(ctx, 100)
+			if e != nil || len(rows) != 24 {
+				t.Fatal("lost cross-host admission", e)
+			}
+			return
+		default:
+		}
 	}
 }

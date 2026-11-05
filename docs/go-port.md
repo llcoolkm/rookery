@@ -5,8 +5,8 @@ protocol. Both languages can use one hub. The Python hub stays authoritative;
 there is no hub rewrite in this plan. [contract.md](contract.md) defines the
 Python 0.3.1 baseline, including compact MCP results and irreversible delivery
 claims. Phase 1 established the contract and skeleton. Phase 2 now implements the Go
-core, Linux platform, Codex/Claude routes and CLI; isolated tests pass. Native
-harness and live-hub acceptance remain required before declaring Linux parity.
+core, Linux platform, Codex/Claude routes and CLI; isolated tests pass. Phase 2 passed isolated live Linux acceptance at `1685721`; Windows acceptance
+remains a separate gate.
 
 ## Phases and acceptance gates
 
@@ -202,8 +202,8 @@ it cannot expand user authorization.
 ## Phase 2 implementation and evidence
 
 The Go helper is implemented in `go/core`, `go/platform/linux`, `go/helper`,
-`go/provider/codex`, `go/provider/claude` and `go/cmd/rookery`. The module still
-has no third-party runtime dependencies. The Python hub remains authoritative.
+`go/provider/codex`, `go/provider/claude` and `go/cmd/rookery`. Phase 2 introduced no runtime dependencies; phase 3 adds the justified
+`golang.org/x/sys/windows` dependency below. The Python hub remains authoritative.
 
 `store.json` is the Go store and durable outgoing spool. Each mutation reloads
 under `admission.lock`, commits a private temporary file, fsyncs it, renames it,
@@ -245,8 +245,8 @@ ack receipts, committed-but-lost response retry, expiry, the six-message limit,
 polling admission and crash recovery without uncertain replay. Provider tests
 use authenticated fake AF_UNIX Codex control and Claude messaging sockets.
 Tests do not consult real harness histories, configuration, credentials, helper
-state or a live hub. CI runs the integration and Linux race suite; Windows has
-an explicit integration skip until phase 3. The OS-import gate remains enforced.
+state or a live hub. CI runs the integration and Linux race suite; Windows now has a synthetic native durable-helper workflow; Python/Go loopback
+integration remains Linux-only. The OS-import gate remains enforced.
 
 The phase 2 candidate was checked with the following local gates: Python
 unittest discovery (310 tests), `go vet ./...`, `go test ./...`, Linux
@@ -564,3 +564,239 @@ endpoints still reject links. Discovery-log tests verify fixed redacted reasons.
 Whitespace and added-line/new-file privacy checks passed. No live hub, harness
 sessions, real state or credentials were used; installed-harness and native
 Windows acceptance remain unverified.
+
+## Phase 3 implementation status
+
+Phase 2 passed isolated live Linux acceptance on public `1685721`, as reported
+by the operator. Phase 3 adds native Windows code and CI-ready tests; **native
+Windows runtime acceptance has not been performed**. This development environment
+cannot execute Windows tests. Phase 3 is not accepted for production.
+
+`platform/windows` implements the shared interfaces using pure Go and
+`golang.org/x/sys v0.42.0`. This dependency provides maintained typed Win32 security,
+process, socket, job, lock and filesystem bindings absent from the standard
+library. There are no additional runtime dependencies, cgo or shell commands.
+The portable CLI and installer are shared with Linux. Codex retains its sole
+control-connection `thread/queue/add` route. AGY is an unsupported stub on Windows.
+
+State precedence is explicit `--state-dir`, `ROOKERY_GO_HOME`, then
+`%LOCALAPPDATA%\rookery-go`; `ROOKERY_HOME` is ignored. Provider roots honor
+`CODEX_HOME` and `CLAUDE_CONFIG_DIR`, otherwise `%USERPROFILE%\.codex` and
+`%USERPROFILE%\.claude`. State objects use protected owner-only DACLs with no
+SYSTEM grant. Existing unsafe ACLs are refused, never silently repaired. Native
+Scheduled Tasks grant current SID plus SYSTEM. System ancestry trusts SYSTEM,
+Administrators and TrustedInstaller; the volume root is a pinned trust anchor.
+All other ancestors are checked for unauthorized mutation grants and reparse
+points while open without delete sharing. Files also refuse hardlinks, alternate
+data streams, UNC/device paths, DOS device names and trailing-dot/space aliases.
+Provider records stay host-issued and open through endpoint resolution.
+
+Writes create a private same-directory temporary file, flush contents, close it,
+then use `MoveFileEx(REPLACE_EXISTING | WRITE_THROUGH)`; exclusive backups omit
+REPLACE_EXISTING. Locks use `LockFileEx` with cancellation-aware acquisition.
+Storage device/power-loss durability remains a native acceptance item; successful
+Linux fsync tests are not Windows evidence.
+
+Process pins use token SID, creation FILETIME and the kernel boot GUID. Toolhelp
+supplies ancestry only; child/parent creation order and pins are rechecked.
+Image paths come from `QueryFullProcessImageName`. Arbitrary foreign command-line
+inspection reports unsupported rather than reading the PEB or querying NtQuery
+process information. The boot-only native query fails closed on missing API,
+zero GUID or layout mismatch; it has no clock-based fallback.
+
+Own IPC is a first-instance local-only named pipe with an explicit protected
+owner DACL and mandatory integrity label. Accept captures client PID, validates
+process and impersonation token SID/integrity/AppContainer, then pins it. It
+requires the first incoming byte within five seconds (or the caller deadline) to
+establish the connected client's impersonation token, retaining that byte for
+the caller. Dial checks the pipe server PID, token and security descriptor.
+Codex AF_UNIX uses x/sys sockets and the pinned upstream peer policy cited in
+[contract.md](contract.md#go-windows-native-boundary-phase-3); elevated peers are
+refused. The terminal AF_UNIX reparse tag is a narrow nonredirecting socket
+exception; symlinks, junctions and reparse ancestors remain refused.
+
+Exec validates an explicit absolute native PE executable, refuses scripts and
+shell interpreters, creates suspended with an explicit inherited-handle list,
+assigns a kill-on-close job and resumes only after assignment. Output is bounded
+across stdout/stderr; timeout/cancellation after resume is uncertain. Peer input
+uses stdin or authenticated IPC; no provider places peer text in argv.
+
+Service installation uses Task Scheduler COM directly, on an initialized locked
+OS thread, passing XML as BSTR in memory. It does not invoke schtasks or write
+XML files. The logon task is named `rookery-go`, uses InteractiveToken and
+LeastPrivilege, stores no password and does not replace an existing task.
+Start/stop/status/uninstall validate the existing task's owner and protected DACL.
+Scheduled Tasks use the logon account environment, not temporary environment
+overrides from the installing terminal. Use a dedicated test account with
+persistently isolated provider roots before testing logon startup.
+The current COM aggregate ABI implementation supports Windows amd64 only; other
+architectures refuse service operations. Manual daemon operation is available.
+
+### Windows installation
+
+Use an unelevated PowerShell on Windows 11 amd64, native `codex.exe` and
+`claude.exe` (a `.cmd` shim is refused). Build from the reviewed source:
+
+```powershell
+cd go
+go build -o rookery.exe ./cmd/rookery
+.\rookery.exe --version
+.\rookery.exe install codex
+.\rookery.exe install claude
+```
+
+The last two commands only plan registration. After reviewing their output,
+use `install codex --apply` or `install claude --apply`. Only `rookery-go` MCP
+registration is added; an existing `rookery` entry and permission grants are
+preserved. A differing existing `rookery-go` entry is preserved too. Optional
+`install claude --accept-inbound --apply` adds `crossSessionInbound=accept` only
+when absent, with an exclusive private backup; an explicit setting wins.
+Managed MCP configuration refuses user registration.
+
+Provision a bearer file through an approved private channel, protect its owner
+and DACL, then run `configure --node <temporary-node> --url <approved-origin>
+--token-file <private-file> --session-allowlist <provider:UUID,...>`. Do not put
+the bearer in argv. Use a fresh directory to change node/origin. Run `daemon`
+interactively first. `service install --dry-run` renders the task;
+`service install`, `service status`, `service start`, `service stop` and
+`service uninstall` manage only the validated `rookery-go` task. Restart after
+changing `busy-delivery`. Claude native delivery remains held until its token
+source is verified; installing MCP does not remove that gate.
+
+### UNVERIFIED and unsupported Windows behavior
+
+- Actual Codex Desktop Windows version/protocol compatibility and runtime peer
+  authentication. Source verification is pinned to `rust-v0.166.0`, not a claim
+  about every installed Desktop build. Unsupported protocol or peer checks hold
+  discovery/delivery; there is no executable fallback.
+- Claude `agents --json` Windows record behavior and token publication in a
+  session record. The official docs prove named-pipe auth and inbound policy,
+  but not that schema. Production `ClaudeAuthToken` always returns unsupported;
+  native delivery is held before any connection. A private local source review
+  with a citable, redistributable schema is required before enabling this path.
+- Native kernel boot GUID layout compatibility, reboots/fast startup, ACL and
+  reparse behavior, disconnect/timeout cleanup, COM lifecycle and power-loss
+  durability. These have test code, not native execution evidence from this task.
+  Explicit foreign-account and AppContainer negative-process fixtures remain
+  outstanding; low-integrity token refusal has a native CI-ready test.
+- AppContainer and lower-integrity peers are intentionally unsupported.
+  Elevated Codex peers are intentionally refused to match upstream.
+- Arbitrary process argv inspection and non-amd64 Scheduled Task COM are
+  unsupported. Windows AGY remains deferred.
+
+### Exact read-only verification checklist (real Windows 11)
+
+Do this before install/configure/daemon. Keep all output private: ACLs, process
+IDs, task XML and harness listings contain machine/session data. None belongs
+in an issue, commit or acceptance transcript committed to this public repo.
+These commands inspect existing state and do not start a helper or harness.
+
+```powershell
+[Environment]::OSVersion.Version
+[Runtime.InteropServices.RuntimeInformation]::OSArchitecture
+whoami /user
+whoami /groups
+Get-Command codex.exe,claude.exe | Select-Object Name,Source
+codex.exe --version
+claude.exe --version
+Get-Item Env:CODEX_HOME,Env:CLAUDE_CONFIG_DIR,Env:ROOKERY_GO_HOME -ErrorAction SilentlyContinue
+$codexRoot = if ($env:CODEX_HOME) { $env:CODEX_HOME } else { Join-Path $env:USERPROFILE '.codex' }
+$claudeRoot = if ($env:CLAUDE_CONFIG_DIR) { $env:CLAUDE_CONFIG_DIR } else { Join-Path $env:USERPROFILE '.claude' }
+$stateRoot = if ($env:ROOKERY_GO_HOME) { $env:ROOKERY_GO_HOME } else { Join-Path $env:LOCALAPPDATA 'rookery-go' }
+foreach ($root in @($codexRoot,$claudeRoot,$stateRoot)) {
+  for ($p=$root; $p; $p=Split-Path -Parent $p) {
+    if (Test-Path -LiteralPath $p) {
+      Get-Item -Force -LiteralPath $p | Select-Object Attributes,LinkType
+      Get-Acl -LiteralPath $p | Select-Object Owner,AreAccessRulesProtected,Access
+    }
+  }
+}
+$control = Join-Path $codexRoot 'app-server-control\app-server-control.sock'
+Get-Item -Force -LiteralPath $control -ErrorAction SilentlyContinue | Select-Object Attributes,LinkType
+Get-ScheduledTask -TaskName rookery-go -ErrorAction SilentlyContinue | Select-Object TaskName,State,Principal
+```
+
+Check each ancestor's ACL privately; root-volume creation grants are the only
+root exception. Refuse any redirecting reparse object, foreign-owned provider
+record, or writable foreign ancestor. Do not dump session records or tokens.
+Privately inspect installed MCP configuration for `rookery` coexistence and exact
+`rookery-go` command/arguments. Verify the Desktop process is unelevated in Task
+Manager and both harness versions match reviewed evidence. Do not use `doctor`
+on a production root as a substitute for this read-only preflight: opening state
+can create state/locks. Tests below create only disposable synthetic fixtures.
+
+### Windows CI and isolated live acceptance procedure
+
+CI's windows-latest job runs `go vet ./...` and **the full `go test ./...`**,
+including ACL, reparse, LockFileEx, two-process pipe, process, Exec, store,
+contract vectors and Windows durable-helper workflow tests. Contract JSON decoding
+preserves escaped LF envelopes on CRLF checkouts. Fake Codex AF_UNIX and fake
+Claude pipes exercise transport with synthetic records/keys. Elevated CI asserts
+Codex refusal; successful AF_UNIX protocol cases require an unelevated run.
+Linux retains Python/Go isolated integration and `-race`. The OS-import and
+Codex no-command gates remain in place. Cross-vet and `go test -c` of every
+Windows package are separate compile gates, not native execution proof.
+
+On a real Windows 11 amd64 machine, acceptance is an operator procedure, **not
+permission for this development task to contact a hub or real sessions**:
+
+1. Complete the read-only preflight above. Record only redacted booleans and
+   version numbers in public evidence. Keep the raw evidence private.
+2. Use a disposable local test account and a short private working directory.
+   Set fresh `CODEX_HOME`, `CLAUDE_CONFIG_DIR`, `ROOKERY_GO_HOME` before launching
+   either harness; never copy normal state, sessions or tokens. Enroll/login
+   through each harness's own UI if required. Confirm Desktop actually honors
+   the isolated CODEX_HOME; stop if it uses the ordinary profile. Do not proceed
+   with an assumed Desktop launch flag.
+3. Run `go test ./...` unelevated in the disposable account. Require successful
+   Codex fake protocol cases, pipe tests, native boot GUID, private files,
+   concurrent independent stores and all contract vectors. Run again after reboot;
+   privately compare boot IDs: stable during a boot and changed after reboot.
+4. Create a temporary hub node through the existing approved operator procedure,
+   with a fresh short-lived bearer delivered only to a protected file. Use a
+   fresh helper state and strict nonempty session allowlist containing only the
+   exact synthetic test sessions. Never let Python and Go claim the same session.
+5. Register only `rookery-go` MCP in isolated provider profiles. Configure strict
+   MCP/tool permissions (no broad tool allow grant), exact executable and state
+   arguments, and verify existing `rookery` registration is untouched. Start the
+   helper interactively, not as a task. Discover/enroll only the allowlisted
+   synthetic sessions; unrelated live sessions must never publish or receive.
+6. For Codex Desktop: prove loaded-thread listing, exact thread/read, idle-only
+   queue, pending while busy, later single submission when idle, and actual
+   model receipt by explicit ack/reply. Submitted alone is not receipt. Exercise
+   disconnect after queue write, restart, unchanged request IDs, expired offline
+   messages, stale/process-reused pins and no replay after uncertainty. Verify
+   missing/unsafe rendezvous and elevated peers refuse without command fallback.
+7. For Claude: verify agents output and record provenance privately. With this
+   revision require `auth_unverified`, zero native connects and no delivery.
+   **Successful Claude live acceptance is blocked** until a source/doc-backed
+   session-record token schema is implemented and reviewed. Once that gate is
+   satisfied, require first-line auth with that session's token, failed auth
+   rejection, crossSessionInbound accept/hold/refuse, idle/busy on/off with restart,
+   wrapper preservation, exact PID/session pin and actual ack/reply. Never use a
+   different session's token to make this test pass.
+8. In disposable roots only, test foreign DACL grants, junction/reparse ancestry,
+   stale pipe server and PID, lower-integrity/AppContainer rejection, `.cmd/.bat`
+   refusal, output limits, timeout child-job cleanup and replacement interrupted
+   before/after move. Keep uncertain claims unreplayed. Power-loss durability
+   requires its own disposable VM/storage test, not killing the production host.
+9. Only after foreground acceptance, inspect `service install --dry-run`, install
+   the disposable account's `rookery-go` task, log out/in, verify one helper,
+   protected task descriptor, status/start/stop/uninstall and preservation of an
+   unrelated `rookery` task. Test installer idempotence and existing-entry refusal.
+10. Stop helper/harnesses, disable/remove temporary hub enrollment and node,
+    revoke the bearer, uninstall the test task/MCP entries and remove only the
+    disposable profile/state. Privately retain evidence until review; publish
+    only synthetic results. Phase 3 acceptance requires both harnesses; the Claude
+    block must not be counted as a successful end-to-end messaging test.
+
+### Phase 3 local validation evidence
+
+The development run passed 310 Python unit tests, Linux `go vet ./...`,
+`go test ./...`, `go test -race ./...`, `GOOS=windows go vet ./...`, and
+`GOOS=windows go test -c` for every package listed for that target. The portable
+OS-import gate passed for Linux and Windows; the Codex no-command AST gate ran
+in the Go suite. Staged whitespace and privacy checks passed. No native Windows
+test execution, CI run, real harness session, Scheduled Task installation or
+live-hub acceptance occurred during this work. Windows CI execution and the
+native acceptance gates above remain outstanding.

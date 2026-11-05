@@ -634,3 +634,53 @@ by client message ID. These gaps do not authorize guessing, command fallbacks,
 thread resume, or replay. Missing evidence before submission holds delivery;
 unknown outcomes after a possible write remain uncertain. Phase 2c tests use
 synthetic fake control servers and isolated temporary hub state only.
+
+## Go Windows native boundary (phase 3)
+
+The fixed Codex rendezvous is the direct advertised
+`CODEX_HOME/app-server-control/app-server-control.sock`; Windows does not use the
+Unix symlink arrangement. The only permitted terminal reparse tag is the native
+nonredirecting AF_UNIX socket tag `IO_REPARSE_TAG_AF_UNIX` (`0x80000023`); all
+ancestor reparse points and every other terminal tag are refused. This exception
+never applies to ordinary files or Claude records. Socket owner SID must match;
+its parent must be protected and private. See the pinned
+[Windows binder](https://github.com/openai/codex/blob/rust-v0.166.0/codex-rs/app-server-transport/src/transport/unix_socket.rs#L106-L145)
+and Microsoft's [AF_UNIX implementation](https://devblogs.microsoft.com/commandline/af_unix-comes-to-windows/).
+
+The dialer MUST obtain the server PID with `SIO_AF_UNIX_GETPEERPID`, reject zero
+PID, require matching token SID, and reject both an elevated server and an
+elevated client. A returned-byte count of zero does not itself invalidate a
+nonzero returned PID on older Windows. These are Codex's own
+[Windows peer checks at rust-v0.166.0](https://github.com/openai/codex/blob/rust-v0.166.0/codex-rs/uds/src/windows_peer.rs#L23-L98).
+Rookery additionally refuses lower-integrity and AppContainer peers, and pins
+creation FILETIME plus kernel boot GUID. Filesystem validation and the process
+pin are rechecked after connection. No credential-bearing protocol bytes precede
+authentication.
+
+Rookery state objects grant only the current SID, using a protected explicit
+DACL. System-owned ancestry may also grant SYSTEM, Administrators and
+TrustedInstaller mutation rights. The volume root is a pinned trust anchor;
+ordinary Windows volume roots permit users to create folders. This exception
+never applies to descendants or to state objects. Ancestor handles deny delete
+sharing throughout each operation. Local files reject hardlinks as well as
+reparse points. Scheduled Task security grants current SID and SYSTEM only.
+
+The boot identity is `BootIdentifier` from the kernel's
+`SystemBootEnvironmentInformation`, not rounded uptime or wall time. The native
+query is solely for boot identity; process pinning uses `OpenProcess` and
+`GetProcessTimes`, without NtQuery process inspection. Missing API, unexpected
+layout or zero GUID MUST fail closed. Native API layout compatibility is
+UNVERIFIED until the Windows acceptance gate; Microsoft describes
+[NtQuerySystemInformation](https://learn.microsoft.com/en-us/windows/win32/api/winternl/nf-winternl-ntquerysysteminformation)
+as internal and subject to change.
+
+Claude's official [inbox socket documentation](https://code.claude.com/docs/en/cross-session-messaging#the-sessions-inbox-socket)
+specifies native named pipes and the mandatory first-line JSON auth frame
+`{"type":"auth","token":"<token>"}`. It documents the exported token, but does
+not establish a session-record token field/schema for an unrelated helper.
+Windows `ClaudeRecordAuthenticator` therefore refuses that UNVERIFIED source.
+Do not infer a field, use the helper's environment token or borrow another
+session's token. Discovery can report a live session from `agents --json`, but
+native delivery remains held with redacted local reason `auth_unverified` and
+no connection or token transmission. Synthetic test capabilities prove frame
+ordering only; they cannot authorize a production token source.

@@ -94,6 +94,15 @@ jobs:
       - name: Race detector including isolated integration
         if: runner.os == 'Linux'
         run: go test -race ./...
+      - name: Compile every Windows test package
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p "$RUNNER_TEMP/rookery-windows-tests"
+          while IFS= read -r package; do
+            name=${package#github.com/llcoolkm/rookery/go/}
+            name=$(printf '%s' "$name" | tr '/' '_')
+            GOOS=windows go test -c -o "$RUNNER_TEMP/rookery-windows-tests/$name.test.exe" "$package"
+          done < <(GOOS=windows go list ./...)
       - name: Build for Windows
         run: GOOS=windows go build ./...
       - name: Build for Linux

@@ -196,3 +196,13 @@ type Host struct {
 	Service Service
 	Paths   Paths
 }
+
+// ClaudeRecordAuthenticator is an optional native-Windows capability. The
+// provider invokes it on the same open, verified session record used for endpoint
+// discovery. It must prove a documented token source belongs to that record and
+// exact session; unsupported or unverified formats return an error. The provider
+// sends {"type":"auth","token":TOKEN} as the first line, never in argv or logs.
+// No fallback to a helper environment token or another session's token is allowed.
+type ClaudeRecordAuthenticator interface {
+	ClaudeAuthToken(context.Context, File) (string, error)
+}

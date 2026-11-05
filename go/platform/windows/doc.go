@@ -1,7 +1,8 @@
 //go:build windows
 
-// Package windows will implement platform.Host using secured AF_UNIX or named
-// pipes, peer SID/PID checks, owner-only DACLs, Toolhelp32 process inspection,
-// start-time and boot identity pinning, reparse-point refusal, file locks and a
-// per-user Scheduled Task. TODO phase 3; x/sys requires a dependency review.
+// Package windows implements native process, private filesystem, pipe, AF_UNIX,
+// execution and per-user Scheduled Task facilities. golang.org/x/sys/windows
+// supplies typed Win32 bindings and structures missing from the standard library;
+// no shell, cgo, external executable or other runtime dependency is required.
+// Native Windows acceptance is required; cross-compilation is not runtime proof.
 package windows

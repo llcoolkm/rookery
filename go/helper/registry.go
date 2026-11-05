@@ -132,11 +132,11 @@ func (agyStub) Capabilities() provider.Capabilities {
 }
 func (agyStub) Admission(core.Session) provider.Admission { return provider.AdmitNone }
 func (agyStub) Identity(context.Context, core.CallMetadata) (string, error) {
-	return "", errors.New("AGY native provider is deferred to phase 4")
+	return "", errors.New("AGY native provider unsupported; Linux phase 4 and Windows deferred")
 }
 func (agyStub) Discover(context.Context) ([]core.Session, error) { return []core.Session{}, nil }
 func (agyStub) Deliver(context.Context, core.Session, core.Message) (core.DeliveryResult, error) {
-	return core.DeliveryResult{Status: "held", Detail: "AGY native provider is deferred to phase 4"}, nil
+	return core.DeliveryResult{Status: "held", Detail: "AGY native provider unsupported; Linux phase 4 and Windows deferred"}, nil
 }
 func (agyStub) Busy(context.Context, core.Session) (provider.BusyState, error) {
 	return provider.Unknown, nil

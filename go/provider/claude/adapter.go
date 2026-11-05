@@ -23,8 +23,9 @@ var errDiscovery = errors.New("Claude session discovery unavailable")
 
 type Options struct{ Executable string }
 type destination struct {
-	pin      platform.ProcessRef
-	endpoint platform.Endpoint
+	pin       platform.ProcessRef
+	endpoint  platform.Endpoint
+	authToken string
 }
 type Adapter struct {
 	config       provider.Config
@@ -238,6 +239,18 @@ func (a *Adapter) Discover(ctx context.Context) ([]core.Session, error) {
 			heldReasons[r.ID] = "record_invalid"
 			continue
 		}
+		// Windows requires an authenticated first line. The platform capability
+		// must prove the token belongs to this verified record; it cannot borrow
+		// the helper's environment token. Unverified record formats hold delivery.
+		token := ""
+		if auth, required := a.host.Paths.(platform.ClaudeRecordAuthenticator); required {
+			token, err = auth.ClaudeAuthToken(ctx, file)
+			if err != nil || token == "" || len(token) > 4096 {
+				file.Close()
+				heldReasons[r.ID] = "auth_unverified"
+				continue
+			}
+		}
 		ep, err := a.host.Paths.HarnessEndpoint(ctx, "claude", file, record.Address, pin)
 		file.Close()
 		if err != nil || a.host.Process.Pin(ctx, pin) != nil {
@@ -247,7 +260,7 @@ func (a *Adapter) Discover(ctx context.Context) ([]core.Session, error) {
 			}
 			continue
 		}
-		destinations[r.ID] = destination{pin: pin, endpoint: ep}
+		destinations[r.ID] = destination{pin: pin, endpoint: ep, authToken: token}
 	}
 	a.mu.Lock()
 	for _, old := range a.destinations {
@@ -360,6 +373,13 @@ func (a *Adapter) Deliver(ctx context.Context, s core.Session, m core.Message) (
 	b, err := BuildFrame(core.Render(m), "rookery-local", s.ID)
 	if err != nil {
 		return outcome("failed", "invalid Claude native frame")
+	}
+	if dest.authToken != "" {
+		auth, encodeErr := json.Marshal(map[string]string{"type": "auth", "token": dest.authToken})
+		if encodeErr != nil {
+			return held("auth_unverified", "native authentication unavailable; no submission attempted")
+		}
+		b = append(append(auth, '\n'), b...)
 	}
 	conn, err := a.host.IPC.Dial(ctx, dest.endpoint)
 	if err != nil {

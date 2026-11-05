@@ -4,9 +4,11 @@ package main
 
 import (
 	"context"
-	"errors"
+	"github.com/llcoolkm/rookery/go/platform"
+	host "github.com/llcoolkm/rookery/go/platform/windows"
 )
 
-func runPlatform(context.Context, []string) (any, error) {
-	return nil, errors.New("Windows helper runtime is deferred to phase 3; use the Python helper on Linux")
+func newHost(state string) (platform.Host, error) { return host.New(state) }
+func platformSignals(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithCancel(ctx)
 }

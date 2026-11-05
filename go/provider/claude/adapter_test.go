@@ -328,3 +328,44 @@ func TestHeldReasonsStayLocalAndDistinguishFailures(t *testing.T) {
 		t.Fatal(r)
 	}
 }
+
+// A fake capability models a future verified Windows record format. The real
+// Windows implementation refuses this capability until its source is verified.
+type authPaths struct {
+	fakePaths
+	token string
+	err   error
+}
+
+func (p authPaths) ClaudeAuthToken(context.Context, platform.File) (string, error) {
+	return p.token, p.err
+}
+func TestTokenHandshakePrecedesNativeFrame(t *testing.T) {
+	a, _, ipc, _, s := fixture(t, provider.Config{})
+	a.host.Paths = authPaths{token: "synthetic-test-key"}
+	sessions, err := a.Discover(context.Background())
+	if err != nil || len(sessions) != 1 {
+		t.Fatal(err)
+	}
+	r, err := a.Deliver(context.Background(), sessions[0], message())
+	if err != nil || r.Status != "submitted" {
+		t.Fatal(r, err)
+	}
+	lines := strings.Split(strings.TrimSpace(ipc.conn.String()), "\n")
+	if len(lines) != 2 {
+		t.Fatal("handshake and frame must be separate lines")
+	}
+	var auth map[string]string
+	if json.Unmarshal([]byte(lines[0]), &auth) != nil || auth["type"] != "auth" || auth["token"] != "synthetic-test-key" {
+		t.Fatal("missing auth first line")
+	}
+	ipc.conn.Reset()
+	a.host.Paths = authPaths{err: errors.New("unverified")}
+	if _, err = a.Discover(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	r, err = a.Deliver(context.Background(), s, message())
+	if err != nil || r.Status != "held" || r.LocalReason != "auth_unverified" || ipc.conn.Len() != 0 {
+		t.Fatal("unverified token must prevent I/O", r, err)
+	}
+}
