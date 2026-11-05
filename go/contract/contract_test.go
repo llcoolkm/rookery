@@ -7,6 +7,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"reflect"
 	"strings"
@@ -156,9 +159,48 @@ func TestRequestIDVectors(t *testing.T) {
 }
 
 func TestHubParity(t *testing.T) {
-	load(t)
-	t.Skip("TODO phase 2: replay hub exchanges through Go HTTPS client and delivery machine")
+	for _, c := range load(t).Hub {
+		t.Run(c.Name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var got core.RPCRequest
+				if json.NewDecoder(r.Body).Decode(&got) != nil {
+					t.Error("invalid request")
+				}
+				a, _ := json.Marshal(got)
+				b, _ := json.Marshal(c.Request)
+				var x, y any
+				_ = json.Unmarshal(a, &x)
+				_ = json.Unmarshal(b, &y)
+				if !reflect.DeepEqual(x, y) {
+					t.Error("request changed")
+				}
+				w.WriteHeader(c.Status)
+				raw, _ := json.Marshal(c.Response)
+				_, _ = io.WriteString(w, string(raw))
+			}))
+			defer server.Close()
+			hub, e := core.NewHTTPHub(server.URL, strings.Repeat("x", 32), true)
+			if e != nil {
+				t.Fatal(e)
+			}
+			got, e := hub.Call(context.Background(), c.Request)
+			if c.Status == 200 {
+				if e != nil {
+					t.Fatal(e)
+				}
+				var x, y any
+				_ = json.Unmarshal(got, &x)
+				_ = json.Unmarshal(c.Response.Result, &y)
+				if !reflect.DeepEqual(x, y) {
+					t.Fatal("response changed")
+				}
+			} else if e == nil {
+				t.Fatal("expected rejection")
+			}
+		})
+	}
 }
+
 func TestMCPParity(t *testing.T) {
 	v := load(t)
 	backend := &vectorBackend{values: map[string]any{}}
