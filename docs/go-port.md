@@ -212,6 +212,14 @@ Tests do not consult real harness histories, configuration, credentials, helper
 state or a live hub. CI runs the integration and Linux race suite; Windows has
 an explicit integration skip until phase 3. The OS-import gate remains enforced.
 
+The phase 2 candidate was checked with the following local gates: Python
+unittest discovery (310 tests), `go vet ./...`, `go test ./...`, Linux
+`go test -race ./...`, `GOOS=windows go build ./...`, and
+`GOOS=linux go build ./...`. All passed. All Linux contract vectors run without
+phase-specific skips. The portable import gate, whitespace check and added-line
+privacy grep were clean. These results cover synthetic/local tests only; CI
+execution on hosted runners and the live-server procedure below are unverified.
+
 ### Remaining parity and acceptance gaps
 
 - **Native acceptance is outstanding.** Synthetic socket protocols and local hub
