@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 	"unsafe"
@@ -210,5 +211,169 @@ func TestLowerIntegrityTokenRefused(t *testing.T) {
 	}
 	if e = tokenAllowed(lower, current, false); e == nil {
 		t.Fatal("same-user lower-integrity token accepted")
+	}
+}
+
+//go:noinline
+func growPendingIOStack(depth int) byte {
+	var frame [8192]byte
+	frame[0] = byte(depth)
+	if depth > 0 {
+		frame[1] = growPendingIOStack(depth - 1)
+	}
+	runtime.KeepAlive(&frame)
+	return frame[0] ^ frame[1]
+}
+
+func TestPendingIOStackGrowth(t *testing.T) {
+	i, p := testIPC(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	ep, err := p.Endpoint("stack-growth-fixture")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pl, err := i.Listen(ctx, ep)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l := pl.(*listener)
+	defer l.Close()
+	ref, err := p.process.Current(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry, _ := p.get(ep)
+	name, _ := win.UTF16PtrFromString(entry.path)
+	client, err := win.CreateFile(name, win.GENERIC_READ|win.GENERIC_WRITE, 0, nil, win.OPEN_EXISTING, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer win.CloseHandle(client)
+	// A client may connect before ConnectNamedPipe. This raw synthetic pair
+	// isolates transport from the first-message token protocol.
+	if err = win.ConnectNamedPipe(l.pending, nil); err != nil && err != win.ERROR_PIPE_CONNECTED {
+		t.Fatal(err)
+	}
+	c := &connection{handle: l.pending, peer: ref, process: p.process}
+	c.SetDeadline(time.Now().Add(3 * time.Second))
+	oldWait := waitForIO
+	defer func() { waitForIO = oldWait }()
+	pending := make(chan struct{})
+	grown := false
+	waitForIO = func(event win.Handle, timeout uint32) (uint32, error) {
+		if !grown {
+			var n uint32
+			if err := win.GetOverlappedResult(c.handle, c.readOverlapped, &n, false); err != win.ERROR_IO_INCOMPLETE {
+				t.Fatalf("read was not pending: %v", err)
+			}
+			growPendingIOStack(64)
+			runtime.GC()
+			grown = true
+			close(pending)
+		}
+		return oldWait(event, timeout)
+	}
+	writeDone := make(chan error, 1)
+	go func() {
+		select {
+		case <-pending:
+		case <-ctx.Done():
+			writeDone <- ctx.Err()
+			return
+		}
+		var n uint32
+		writeDone <- win.WriteFile(client, []byte("x"), &n, nil)
+	}()
+	var b [1]byte
+	if n, err := c.Read(b[:]); err != nil || n != 1 || b[0] != 'x' || !grown {
+		t.Fatalf("pending read after stack growth: bytes=%d error=%v", n, err)
+	}
+	if err := <-writeDone; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPendingAcceptStackGrowth(t *testing.T) {
+	i, p := testIPC(t)
+	ep, err := p.Endpoint("accept-stack-growth-fixture")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	pl, err := i.Listen(ctx, ep)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l := pl.(*listener)
+	defer l.Close()
+	oldWait := waitForIO
+	defer func() { waitForIO = oldWait }()
+	grown := false
+	waitForIO = func(event win.Handle, timeout uint32) (uint32, error) {
+		if !grown {
+			var n uint32
+			if err := win.GetOverlappedResult(l.pending, l.overlapped, &n, false); err != win.ERROR_IO_INCOMPLETE {
+				t.Fatalf("accept was not pending: %v", err)
+			}
+			growPendingIOStack(64)
+			runtime.GC()
+			grown = true
+			cancel()
+		}
+		return oldWait(event, timeout)
+	}
+	if _, err := l.Accept(ctx); err != context.Canceled || !grown {
+		t.Fatalf("pending accept cancellation after stack growth: %v", err)
+	}
+}
+
+func TestCloseDrainsPendingAccept(t *testing.T) {
+	i, p := testIPC(t)
+	ep, err := p.Endpoint("accept-close-fixture")
+	if err != nil {
+		t.Fatal(err)
+	}
+	l, err := i.Listen(context.Background(), ep)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	oldWait := waitForIO
+	defer func() { waitForIO = oldWait }()
+	pending := make(chan struct{})
+	var once sync.Once
+	waitForIO = func(event win.Handle, timeout uint32) (uint32, error) {
+		once.Do(func() { close(pending) })
+		return oldWait(event, timeout)
+	}
+	accepted := make(chan error, 1)
+	go func() {
+		_, err := l.Accept(context.Background())
+		accepted <- err
+	}()
+	select {
+	case <-pending:
+	case <-time.After(3 * time.Second):
+		t.Fatal("accept did not become pending")
+	}
+	closed := make(chan error, 1)
+	go func() { closed <- l.Close() }()
+	select {
+	case err := <-accepted:
+		if err == nil {
+			t.Fatal("closed listener accepted a connection")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("pending accept did not drain on close")
+	}
+	select {
+	case err := <-closed:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("close did not finish after draining accept")
 	}
 }

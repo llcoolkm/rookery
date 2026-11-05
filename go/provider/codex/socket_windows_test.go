@@ -6,6 +6,8 @@ import (
 	"bufio"
 	"context"
 	"encoding/binary"
+	"errors"
+	"fmt"
 	win "golang.org/x/sys/windows"
 	"io"
 	"net"
@@ -128,11 +130,24 @@ func TestControlSocket(t *testing.T) {
 			elevated := token.IsElevated()
 			token.Close()
 			if elevated {
-				adapter, _ := New(provider.Config{}, host)
-				if _, err = adapter.Discover(ctx); err == nil {
-					t.Fatal("elevated implicit daemon peer accepted")
+				// Elevated Windows creates this socket with the Administrators
+				// owner. This fixture therefore exercises ownership refusal;
+				// token elevation policy is tested directly in platform/windows.
+				resolver := host.Paths.(interface {
+					ControlEndpoint(context.Context, string) (platform.Endpoint, error)
+				})
+				_, err = resolver.ControlEndpoint(ctx, "codex")
+				want := fmt.Sprintf("control socket owner mismatch: %s", platform.ErrControlEndpointUnsafe)
+				if !errors.Is(err, platform.ErrControlEndpointUnsafe) || err.Error() != want {
+					t.Fatal("expected socket ownership refusal", err)
 				}
-				return // This is an asserted upstream security refusal, not a skip.
+				adapter, _ := New(provider.Config{}, host)
+				_, err = adapter.Discover(ctx)
+				var failure *discoveryError
+				if !errors.As(err, &failure) || failure.reason != "control_endpoint_unsafe" {
+					t.Fatal("expected redacted endpoint refusal", err)
+				}
+				return
 			}
 			requests := []rpcRequest{}
 			done := make(chan error, 1)

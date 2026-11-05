@@ -36,10 +36,11 @@ func NewProcess() (*Process, error) {
 	return &Process{principal: user.User.Sid.String(), boot: boot}, nil
 }
 
-// bootIdentity uses the kernel's boot GUID, not uptime or rounded wall time.
-// This native information class is queried only for boot identity: process
-// pinning never uses NtQueryInformationProcess or a process snapshot. An absent
-// API, changed layout, failed query or zero GUID fails closed.
+// bootIdentity combines the boot-environment GUID (which can identify a loader
+// across reboots) with KUSER_SHARED_DATA.BootId, incremented by the OS loader on
+// each boot attempt. Neither uptime nor rounded wall time is used. The shared
+// page's user mapping and BootId layout are defined by the Windows WDK.
+// An absent API, changed layout, failed read or zero GUID fails closed.
 func bootIdentity() (string, error) {
 	query := win.NewLazySystemDLL("ntdll.dll").NewProc("NtQuerySystemInformation")
 	if query.Find() != nil {
@@ -56,14 +57,21 @@ func bootIdentity() (string, error) {
 	if status != 0 || size != uint32(unsafe.Sizeof(value)) || value.ID == (win.GUID{}) {
 		return "", errProcess
 	}
-	return value.ID.String(), nil
+	var sequence uint32
+	var read uintptr
+	// Read through the OS API instead of constructing an unsafe Go pointer to a
+	// fixed address. The shared page is read-only in every user process.
+	if win.ReadProcessMemory(win.CurrentProcess(), 0x7ffe0000+0x2c4, (*byte)(unsafe.Pointer(&sequence)), unsafe.Sizeof(sequence), &read) != nil || read != unsafe.Sizeof(sequence) {
+		return "", errProcess
+	}
+	return value.ID.String() + ":" + strconv.FormatUint(uint64(sequence), 10), nil
 }
 
 func (p *Process) Current(ctx context.Context) (platform.ProcessRef, error) {
 	return p.Lookup(ctx, os.Getpid())
 }
 
-func (p *Process) inspect(ctx context.Context, pid int, security bool) (platform.ProcessRef, uint32, bool, error) {
+func (p *Process) inspect(ctx context.Context, pid int, security bool, checks ...func(win.Token) error) (platform.ProcessRef, uint32, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return platform.ProcessRef{}, 0, false, err
 	}
@@ -84,6 +92,11 @@ func (p *Process) inspect(ctx context.Context, pid int, security bool) (platform
 		return platform.ProcessRef{}, 0, false, errProcess
 	}
 	defer token.Close()
+	for _, check := range checks {
+		if check(token) != nil {
+			return platform.ProcessRef{}, 0, false, errProcess
+		}
+	}
 	user, err := token.GetTokenUser()
 	if err != nil || user.User.Sid.String() != p.principal {
 		return platform.ProcessRef{}, 0, false, errProcess
@@ -127,6 +140,15 @@ func (p *Process) Lookup(ctx context.Context, pid int) (platform.ProcessRef, err
 // from the same open process handle. SID equality is required, not assumed.
 func (p *Process) Security(ctx context.Context, pid int) (platform.ProcessRef, uint32, bool, error) {
 	return p.inspect(ctx, pid, true)
+}
+
+// authenticateProcess applies peer policy to the token that established ref,
+// while its process handle is still open, avoiding a second PID-based lookup.
+func (p *Process) authenticateProcess(ctx context.Context, pid int, current win.Token, nonElevated bool) (platform.ProcessRef, error) {
+	ref, _, _, err := p.inspect(ctx, pid, false, func(token win.Token) error {
+		return tokenAllowed(token, current, nonElevated)
+	})
+	return ref, err
 }
 func (p *Process) Pin(ctx context.Context, ref platform.ProcessRef) error {
 	live, err := p.Lookup(ctx, ref.PID)
@@ -197,8 +219,11 @@ func (p *Process) Ancestors(ctx context.Context, ref platform.ProcessRef) ([]pla
 		// A reused parent PID has a later creation time than its purported child.
 		parentStart, pe := strconv.ParseUint(next.Start, 10, 64)
 		childStart, ce := strconv.ParseUint(ref.Start, 10, 64)
-		if pe != nil || ce != nil || parentStart > childStart {
+		if pe != nil || ce != nil {
 			return nil, errProcess
+		}
+		if parentStart > childStart {
+			return result, nil
 		}
 		ref = next
 	}

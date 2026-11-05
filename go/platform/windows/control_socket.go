@@ -4,6 +4,7 @@ package windows
 
 import (
 	"context"
+	"fmt"
 	"github.com/llcoolkm/rookery/go/platform"
 	win "golang.org/x/sys/windows"
 	"path/filepath"
@@ -81,7 +82,8 @@ func openAFUnixSocket(path string, sid *win.SID) (win.Handle, socketFileID, erro
 	}
 	owner, _, e := sd.Owner()
 	if e != nil || !win.EqualSid(owner, sid) {
-		return fail()
+		win.CloseHandle(h)
+		return 0, id, fmt.Errorf("control socket owner mismatch: %w", platform.ErrControlEndpointUnsafe)
 	}
 	var info win.ByHandleFileInformation
 	if win.GetFileInformationByHandle(h, &info) != nil {

@@ -15,20 +15,25 @@ import (
 	win "golang.org/x/sys/windows"
 )
 
+// waitForIO is a seam for forcing stack growth while native I/O is pending.
+var waitForIO = win.WaitForSingleObject
+
 var errPeer = errors.New("local peer authentication refused")
 
 type ipc struct{ paths *paths }
 type connection struct {
-	handle                      win.Handle
-	socket                      bool
-	peer                        platform.ProcessRef
-	process                     platform.Process
-	mu                          sync.Mutex
-	readMu, writeMu             sync.Mutex
-	readDeadline, writeDeadline time.Time
-	closed                      bool
-	prefix                      []byte
-	active                      sync.WaitGroup
+	handle                          win.Handle
+	socket                          bool
+	peer                            platform.ProcessRef
+	process                         platform.Process
+	mu                              sync.Mutex
+	readMu, writeMu                 sync.Mutex
+	readDeadline, writeDeadline     time.Time
+	closed                          bool
+	prefix                          []byte
+	active                          sync.WaitGroup
+	readOverlapped, writeOverlapped *win.Overlapped
+	firstBuffer                     [1]byte
 }
 
 func (c *connection) Peer() (platform.ProcessRef, error) {
@@ -98,8 +103,25 @@ func (c *connection) transfer(b []byte, write bool) (int, error) {
 		return 0, errPeer
 	}
 	defer win.CloseHandle(event)
-	ov := win.Overlapped{HEvent: event}
-	var n uint32
+	// The kernel retains these addresses until completion, including cancellation.
+	// Store OVERLAPPED on the connection and pin the caller's backing array so
+	// stack growth cannot invalidate an asynchronous read or write.
+	owned := &c.readOverlapped
+	if write {
+		owned = &c.writeOverlapped
+	}
+	if *owned == nil {
+		*owned = new(win.Overlapped)
+	}
+	ov := *owned
+	*ov = win.Overlapped{HEvent: event}
+	var pins runtime.Pinner
+	pins.Pin(ov)
+	pins.Pin(&b[0])
+	defer pins.Unpin()
+	var n, flags uint32
+	pins.Pin(&n)
+	pins.Pin(&flags)
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()
@@ -109,16 +131,15 @@ func (c *connection) transfer(b []byte, write bool) (int, error) {
 	defer c.active.Done()
 	if c.socket {
 		buf := win.WSABuf{Len: uint32(len(b)), Buf: &b[0]}
-		var flags uint32
 		if write {
-			e = win.WSASend(c.handle, &buf, 1, &n, 0, &ov, nil)
+			e = win.WSASend(c.handle, &buf, 1, &n, 0, ov, nil)
 		} else {
-			e = win.WSARecv(c.handle, &buf, 1, &n, &flags, &ov, nil)
+			e = win.WSARecv(c.handle, &buf, 1, &n, &flags, ov, nil)
 		}
 	} else if write {
-		e = win.WriteFile(c.handle, b, &n, &ov)
+		e = win.WriteFile(c.handle, b, &n, ov)
 	} else {
-		e = win.ReadFile(c.handle, b, &n, &ov)
+		e = win.ReadFile(c.handle, b, &n, ov)
 	}
 	c.mu.Unlock()
 	if e != nil && !errors.Is(e, win.ERROR_IO_PENDING) {
@@ -128,10 +149,10 @@ func (c *connection) transfer(b []byte, write bool) (int, error) {
 		return 0, errPeer
 	}
 	for {
-		r, waitErr := win.WaitForSingleObject(event, 50)
+		r, waitErr := waitForIO(event, 50)
 		if waitErr != nil {
-			win.CancelIoEx(c.handle, &ov)
-			c.overlappedResult(&ov, &n, true)
+			win.CancelIoEx(c.handle, ov)
+			c.overlappedResult(ov, &n, true)
 			runtime.KeepAlive(b)
 			return 0, errPeer
 		}
@@ -146,13 +167,13 @@ func (c *connection) transfer(b []byte, write bool) (int, error) {
 		closed := c.closed
 		c.mu.Unlock()
 		if closed || (!deadline.IsZero() && !time.Now().Before(deadline)) {
-			win.CancelIoEx(c.handle, &ov)
-			c.overlappedResult(&ov, &n, true)
+			win.CancelIoEx(c.handle, ov)
+			c.overlappedResult(ov, &n, true)
 			runtime.KeepAlive(b)
 			return int(n), errors.New("local I/O deadline or closure")
 		}
 	}
-	e = c.overlappedResult(&ov, &n, false)
+	e = c.overlappedResult(ov, &n, false)
 	runtime.KeepAlive(b)
 	if errors.Is(e, win.ERROR_BROKEN_PIPE) || (!write && e == nil && n == 0) {
 		return int(n), io.EOF
@@ -235,25 +256,17 @@ func (i *ipc) authenticate(ctx context.Context, h win.Handle, socket, server boo
 	if pid == 0 {
 		return nil, errPeer
 	}
-	ref, e := i.paths.process.Lookup(ctx, int(pid))
-	if e != nil || (expected != nil && ref != *expected) {
-		return nil, errPeer
-	}
-	ph, e := win.OpenProcess(win.PROCESS_QUERY_LIMITED_INFORMATION, false, pid)
-	if e != nil {
-		return nil, errPeer
-	}
-	defer win.CloseHandle(ph)
-	var pt, ct win.Token
-	if win.OpenProcessToken(ph, win.TOKEN_QUERY, &pt) != nil {
-		return nil, errPeer
-	}
-	defer pt.Close()
+	var ct win.Token
 	if win.OpenProcessToken(win.CurrentProcess(), win.TOKEN_QUERY, &ct) != nil {
 		return nil, errPeer
 	}
 	defer ct.Close()
-	if tokenAllowed(pt, ct, socket) != nil {
+	process, ok := i.paths.process.(*Process)
+	if !ok {
+		return nil, errPeer
+	}
+	ref, e := process.authenticateProcess(ctx, int(pid), ct, socket)
+	if e != nil || (expected != nil && ref != *expected) {
 		return nil, errPeer
 	}
 	c := &connection{handle: h, socket: socket, peer: ref, process: i.paths.process}
@@ -263,11 +276,10 @@ func (i *ipc) authenticate(ctx context.Context, h win.Handle, socket, server boo
 			deadline = d
 		}
 		c.SetReadDeadline(deadline)
-		var first [1]byte
-		if n, e := c.transfer(first[:], false); e != nil || n != 1 {
+		if n, e := c.transfer(c.firstBuffer[:], false); e != nil || n != 1 {
 			return nil, errPeer
 		}
-		c.prefix = append(c.prefix, first[0])
+		c.prefix = append(c.prefix, c.firstBuffer[0])
 		c.SetReadDeadline(time.Time{})
 		if connectedTokenAllowed(h, ct) != nil {
 			return nil, errPeer
@@ -376,6 +388,8 @@ type listener struct {
 	closed     bool
 	acceptMu   sync.Mutex
 	descriptor *win.SECURITY_DESCRIPTOR
+	overlapped *win.Overlapped
+	active     sync.WaitGroup
 }
 
 func (l *listener) create(first bool) (win.Handle, error) {
@@ -426,17 +440,28 @@ func fmtUint(n uint32) string {
 }
 func (l *listener) Close() error {
 	l.mu.Lock()
-	defer l.mu.Unlock()
 	if l.closed {
+		l.mu.Unlock()
 		return nil
 	}
 	l.closed = true
 	win.CancelIoEx(l.pending, nil)
+	l.mu.Unlock()
+	// Keep the handle valid until Accept has drained its cancelled completion.
+	l.active.Wait()
 	return win.CloseHandle(l.pending)
 }
 func (l *listener) Accept(ctx context.Context) (platform.Connection, error) {
 	l.acceptMu.Lock()
 	defer l.acceptMu.Unlock()
+	l.mu.Lock()
+	if l.closed {
+		l.mu.Unlock()
+		return nil, io.ErrClosedPipe
+	}
+	l.active.Add(1)
+	l.mu.Unlock()
+	defer l.active.Done()
 	for {
 		l.mu.Lock()
 		if l.closed {
@@ -449,34 +474,58 @@ func (l *listener) Accept(ctx context.Context) (platform.Connection, error) {
 		if err != nil {
 			return nil, errPeer
 		}
-		ov := win.Overlapped{HEvent: event}
-		err = win.ConnectNamedPipe(h, &ov)
-		if err == nil || errors.Is(err, win.ERROR_PIPE_CONNECTED) {
+		if l.overlapped == nil {
+			l.overlapped = new(win.Overlapped)
+		}
+		ov := l.overlapped
+		*ov = win.Overlapped{HEvent: event}
+		l.mu.Lock()
+		if l.closed {
+			l.mu.Unlock()
+			win.CloseHandle(event)
+			return nil, io.ErrClosedPipe
+		}
+		err = win.ConnectNamedPipe(h, ov)
+		l.mu.Unlock()
+		connected := errors.Is(err, win.ERROR_PIPE_CONNECTED)
+		if err == nil || connected {
 			win.SetEvent(event)
 		} else if !errors.Is(err, win.ERROR_IO_PENDING) {
 			win.CloseHandle(event)
 			return nil, errPeer
 		}
+		var waitErr error
 		for {
-			r, e := win.WaitForSingleObject(event, 50)
+			r, e := waitForIO(event, 50)
 			if e != nil {
-				err = errPeer
+				waitErr = errPeer
 				break
 			}
 			if r == win.WAIT_OBJECT_0 {
 				break
 			}
 			if ctx.Err() != nil {
-				win.CancelIoEx(h, &ov)
-				var n uint32
-				win.GetOverlappedResult(h, &ov, &n, true)
-				err = ctx.Err()
+				waitErr = ctx.Err()
 				break
 			}
 		}
+		if !connected {
+			if waitErr != nil {
+				win.CancelIoEx(h, ov)
+			}
+			var n uint32
+			// An event only signals completion; retrieve the operation status and
+			// drain cancellations before releasing its event or OVERLAPPED.
+			err = win.GetOverlappedResult(h, ov, &n, true)
+		} else {
+			err = nil // ERROR_PIPE_CONNECTED did not start an overlapped operation.
+		}
 		win.CloseHandle(event)
-		if err != nil && !errors.Is(err, win.ERROR_IO_PENDING) && !errors.Is(err, win.ERROR_PIPE_CONNECTED) {
-			return nil, err
+		if waitErr != nil {
+			return nil, waitErr
+		}
+		if err != nil {
+			return nil, errPeer
 		}
 		l.mu.Lock()
 		if l.closed {

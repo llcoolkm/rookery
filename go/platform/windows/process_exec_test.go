@@ -9,12 +9,35 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/llcoolkm/rookery/go/platform"
+	win "golang.org/x/sys/windows"
 )
+
+func TestBootIdentityIncludesBootSequence(t *testing.T) {
+	id, err := bootIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	parts := strings.Split(id, ":")
+	if len(parts) != 2 {
+		t.Fatal("boot identity lacks per-boot sequence")
+	}
+	if _, err = win.GUIDFromString(parts[0]); err != nil {
+		t.Fatal("boot environment identity unavailable")
+	}
+	if _, err := strconv.ParseUint(parts[1], 10, 32); err != nil {
+		t.Fatal("invalid boot sequence")
+	}
+	again, err := bootIdentity()
+	if err != nil || again != id {
+		t.Fatal("boot identity changed within one boot")
+	}
+}
 
 func TestProcessIdentity(t *testing.T) {
 	p, err := NewProcess()
@@ -136,7 +159,7 @@ func TestProcessExitInvalidatesPin(t *testing.T) {
 
 func TestExecRefusals(t *testing.T) {
 	executor := Executor{}
-	for _, path := range []string{"relative.exe", `C:\synthetic\script.CmD`, `C:\synthetic\script.BAT`, `C:\Windows\System32\cmd.exe`, `C:\synthetic\powershell.exe`, `C:\synthetic\pwsh.exe`, `C:\synthetic\data.txt`, `\\server\share\program.exe`} {
+	for _, path := range []string{"relative.exe", `C:\synthetic\image.exe:stream.exe`, `C:\synthetic:stream\image.exe`, `C:\synthetic\script.CmD`, `C:\synthetic\script.BAT`, `C:\Windows\System32\cmd.exe`, `C:\synthetic\powershell.exe`, `C:\synthetic\pwsh.exe`, `C:\synthetic\data.txt`, `\\server\share\program.exe`} {
 		result, err := executor.Exec(context.Background(), platform.Spec{Path: path, Timeout: time.Second, MaxOutput: 100})
 		if err == nil || result.State != platform.NotStarted {
 			t.Fatal("unsafe executable accepted")

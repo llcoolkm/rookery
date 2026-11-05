@@ -587,7 +587,10 @@ SYSTEM grant. Existing unsafe ACLs are refused, never silently repaired. Native
 Scheduled Tasks grant current SID plus SYSTEM. System ancestry trusts SYSTEM,
 Administrators and TrustedInstaller; the volume root is a pinned trust anchor.
 All other ancestors are checked for unauthorized mutation grants and reparse
-points while open without delete sharing. Files also refuse hardlinks, alternate
+points while open without delete sharing during validation. Provider-record
+ancestry guards are released after opening; record handles allow delete sharing
+and endpoint resolution reopens the path and verifies the volume/file identity.
+Files also refuse hardlinks, alternate
 data streams, UNC/device paths, DOS device names and trailing-dot/space aliases.
 Provider records stay host-issued and open through endpoint resolution.
 
@@ -597,26 +600,32 @@ REPLACE_EXISTING. Locks use `LockFileEx` with cancellation-aware acquisition.
 Storage device/power-loss durability remains a native acceptance item; successful
 Linux fsync tests are not Windows evidence.
 
-Process pins use token SID, creation FILETIME and the kernel boot GUID. Toolhelp
+Process pins use token SID, creation FILETIME and a boot identity combining the
+boot-environment GUID with `KUSER_SHARED_DATA.BootId`, which Windows increments
+for each boot attempt. The environment GUID alone is not a per-boot identity.
+See [Microsoft’s KUSER_SHARED_DATA reference](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntddk/ns-ntddk-kuser_shared_data). Toolhelp
 supplies ancestry only; child/parent creation order and pins are rechecked.
 Image paths come from `QueryFullProcessImageName`. Arbitrary foreign command-line
 inspection reports unsupported rather than reading the PEB or querying NtQuery
 process information. The boot-only native query fails closed on missing API,
-zero GUID or layout mismatch; it has no clock-based fallback.
+zero GUID or layout mismatch; reading the boot counter also fails closed. There
+is no uptime or rounded wall-clock fallback.
 
 Own IPC is a first-instance local-only named pipe with an explicit protected
 owner DACL and mandatory integrity label. Accept captures client PID, validates
 process and impersonation token SID/integrity/AppContainer, then pins it. It
 requires the first incoming byte within five seconds (or the caller deadline) to
 establish the connected client's impersonation token, retaining that byte for
-the caller. Dial checks the pipe server PID, token and security descriptor.
+the caller. Pending transfers and accepts keep their overlapped structures on
+the heap until completion or cancellation is drained; caller buffers are pinned
+for the entire transfer. Dial checks the pipe server PID, token and security descriptor.
 Codex AF_UNIX uses x/sys sockets and the pinned upstream peer policy cited in
 [contract.md](contract.md#go-windows-native-boundary-phase-3); elevated peers are
 refused. The terminal AF_UNIX reparse tag is a narrow nonredirecting socket
 exception; symlinks, junctions and reparse ancestors remain refused.
 
 Exec validates an explicit absolute native PE executable, refuses scripts and
-shell interpreters, creates suspended with an explicit inherited-handle list,
+shell interpreters and alternate data streams, creates suspended with an explicit inherited-handle list,
 assigns a kill-on-close job and resumes only after assignment. Output is bounded
 across stdout/stderr; timeout/cancellation after resume is uncertain. Peer input
 uses stdin or authenticated IPC; no provider places peer text in argv.
@@ -626,6 +635,11 @@ OS thread, passing XML as BSTR in memory. It does not invoke schtasks or write
 XML files. The logon task is named `rookery-go`, uses InteractiveToken and
 LeastPrivilege, stores no password and does not replace an existing task.
 Start/stop/status/uninstall validate the existing task's owner and protected DACL.
+Installation deletes its newly created task if the post-registration ownership
+check fails and reports any rollback failure. The requested descriptor grants
+only the current account and SYSTEM; the descriptor actually persisted by Task
+Scheduler, including any normalization or extra ACEs, remains unverified on
+native Windows and must pass the post-check.
 Scheduled Tasks use the logon account environment, not temporary environment
 overrides from the installing terminal. Use a dedicated test account with
 persistently isolated provider roots before testing logon startup.
@@ -635,7 +649,8 @@ architectures refuse service operations. Manual daemon operation is available.
 ### Windows installation
 
 Use an unelevated PowerShell on Windows 11 amd64, native `codex.exe` and
-`claude.exe` (a `.cmd` shim is refused). Build from the reviewed source:
+`claude.exe`. Provider CLIs must be native `.exe` binaries; npm `.cmd` shims
+and other scripts are refused. Build from the reviewed source:
 
 ```powershell
 cd go
@@ -671,10 +686,11 @@ source is verified; installing MCP does not remove that gate.
   discovery/delivery; there is no executable fallback.
 - Claude `agents --json` Windows record behavior and token publication in a
   session record. The official docs prove named-pipe auth and inbound policy,
-  but not that schema. Production `ClaudeAuthToken` always returns unsupported;
+  but not that schema. Claude’s real named-pipe DACL is also unverified against
+  the required owner-only policy. Production `ClaudeAuthToken` always returns unsupported;
   native delivery is held before any connection. A private local source review
   with a citable, redistributable schema is required before enabling this path.
-- Native kernel boot GUID layout compatibility, reboots/fast startup, ACL and
+- Native boot GUID/counter compatibility, reboots/fast startup, ACL and
   reparse behavior, disconnect/timeout cleanup, COM lifecycle and power-loss
   durability. These have test code, not native execution evidence from this task.
   Explicit foreign-account and AppContainer negative-process fixtures remain
@@ -749,7 +765,7 @@ permission for this development task to contact a hub or real sessions**:
    the isolated CODEX_HOME; stop if it uses the ordinary profile. Do not proceed
    with an assumed Desktop launch flag.
 3. Run `go test ./...` unelevated in the disposable account. Require successful
-   Codex fake protocol cases, pipe tests, native boot GUID, private files,
+   Codex fake protocol cases, pipe tests, native boot identity, private files,
    concurrent independent stores and all contract vectors. Run again after reboot;
    privately compare boot IDs: stable during a boot and changed after reboot.
 4. Create a temporary hub node through the existing approved operator procedure,
@@ -800,3 +816,15 @@ in the Go suite. Staged whitespace and privacy checks passed. No native Windows
 test execution, CI run, real harness session, Scheduled Task installation or
 live-hub acceptance occurred during this work. Windows CI execution and the
 native acceptance gates above remain outstanding.
+
+### Phase 3 review corrections
+
+Pending Windows reads/writes and pipe accepts now retain heap-owned overlapped
+state and drain completion before releasing resources; buffers remain pinned.
+Native regression tests force stack growth and garbage collection while reads
+and accepts are pending, and check listener-close cancellation. Other corrections
+stop ancestry at a reused parent PID, roll back newly created tasks that fail
+ownership validation, use the per-boot counter, permit provider record rotation
+with identity revalidation, and test elevation policy independently of socket
+ownership. Native Windows execution, actual Task Scheduler descriptors, Claude
+pipe DACL compatibility and the reboot comparison above remain acceptance gates.

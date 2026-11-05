@@ -233,9 +233,23 @@ func (s *service) Install(ctx context.Context, spec platform.ServiceSpec) error 
 		if err != nil {
 			return err
 		}
-		return s.taskOwned(task)
+		return s.verifyCreatedTask(folder, name, task)
 	})
 }
+
+// A successful TASK_CREATE grants cleanup authority over this new task even
+// when Task Scheduler did not preserve the requested descriptor. Never use
+// this rollback path for a preexisting task.
+func (s *service) verifyCreatedTask(folder *comObject, name uintptr, task *comObject) error {
+	if err := s.taskOwned(task); err != nil {
+		if _, cleanupErr := callCOM(folder, 15, name, 0); cleanupErr != nil {
+			return errors.Join(err, fmt.Errorf("new Scheduled Task cleanup failed: %w", cleanupErr))
+		}
+		return err
+	}
+	return nil
+}
+
 func (s *service) Uninstall(ctx context.Context) error {
 	return scheduler(ctx, func(folder *comObject) error {
 		name, free, err := bstr(TaskName)

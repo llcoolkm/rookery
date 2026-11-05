@@ -47,7 +47,7 @@ func ResolveExecutable(name string) (string, error) {
 
 func validateNativeImage(path string) ([]win.Handle, error) {
 	failure := errors.New("native executable refused")
-	if !filepath.IsAbs(path) || strings.ContainsAny(path, "\x00\r\n") || strings.HasPrefix(path, `\\`) || !strings.EqualFold(filepath.Ext(path), ".exe") {
+	if !filepath.IsAbs(path) || strings.ContainsAny(path, "\x00\r\n") || strings.Contains(path[len(filepath.VolumeName(path)):], ":") || strings.HasPrefix(path, `\\`) || !strings.EqualFold(filepath.Ext(path), ".exe") {
 		return nil, failure
 	}
 	switch strings.ToLower(filepath.Base(path)) {
@@ -205,6 +205,11 @@ func (Executor) Exec(ctx context.Context, spec platform.Spec) (platform.ExecResu
 			return failure, refused
 		}
 		opened = append(opened, *pair[0], *pair[1])
+	}
+	for _, h := range []win.Handle{inWrite, outRead, errRead} {
+		if win.SetHandleInformation(h, win.HANDLE_FLAG_INHERIT, 0) != nil {
+			return failure, refused
+		}
 	}
 	handles := []win.Handle{inRead, outWrite, errWrite}
 	attrs, err := win.NewProcThreadAttributeList(1)

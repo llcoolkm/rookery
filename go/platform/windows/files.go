@@ -191,7 +191,8 @@ func (f *files) validateHandle(h win.Handle, private, directory bool) error {
 
 // guardPath holds every component open without FILE_SHARE_DELETE. Replacement,
 // rename and reparse substitution of any traversed component therefore fail
-// until the operation (or verified record lifetime) ends.
+// until the operation ends. Private files retain guards for their lifetime;
+// provider records release them after open and recheck identity at provenance.
 func (f *files) guardPath(path string, private, create bool) ([]win.Handle, error) {
 	if !validPath(path) {
 		return nil, errUnsafe
@@ -303,7 +304,11 @@ func (f *files) open(ctx context.Context, root, name string, create, private boo
 		disposition = win.OPEN_ALWAYS
 		sa = f.attributes()
 	}
-	h, e := win.CreateFile(ptr, access, win.FILE_SHARE_READ|win.FILE_SHARE_WRITE, sa, disposition, win.FILE_FLAG_OPEN_REPARSE_POINT, 0)
+	sharing := uint32(win.FILE_SHARE_READ | win.FILE_SHARE_WRITE)
+	if !private {
+		sharing |= win.FILE_SHARE_DELETE
+	}
+	h, e := win.CreateFile(ptr, access, sharing, sa, disposition, win.FILE_FLAG_OPEN_REPARSE_POINT, 0)
 	if e != nil {
 		closeGuards(g)
 		if errors.Is(e, win.ERROR_FILE_NOT_FOUND) {
@@ -315,6 +320,13 @@ func (f *files) open(ctx context.Context, root, name string, create, private boo
 		win.CloseHandle(h)
 		closeGuards(g)
 		return nil, errUnsafe
+	}
+	if !private {
+		// A provider may rotate records or rename their directories while a
+		// reader holds this handle. Traversal was protected through open;
+		// recordProvenance reopens the name and compares its file identity.
+		closeGuards(g)
+		g = nil
 	}
 	v := &verifiedFile{File: os.NewFile(uintptr(h), name), host: f, root: root, relative: name, guards: g}
 	f.mu.Lock()

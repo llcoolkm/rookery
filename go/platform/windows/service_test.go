@@ -143,3 +143,33 @@ func TestScheduledTaskDescriptorRefusals(t *testing.T) {
 		}
 	}
 }
+
+func TestCreatedTaskVerificationRollback(t *testing.T) {
+	if runtime.GOARCH != "amd64" {
+		t.Skip("Task Scheduler COM backend supports amd64 only")
+	}
+	// Missing GetSecurityDescriptor simulates a failed post-registration
+	// ownership check. These objects never contact the actual scheduler.
+	s := &service{}
+	for _, cleanupFails := range []bool{false, true} {
+		table := new([32]uintptr)
+		deleted := false
+		table[15] = syscall.NewCallback(func(this *comObject, name, flags uintptr) uintptr {
+			deleted = true
+			if name != 123 || flags != 0 {
+				t.Error("wrong DeleteTask arguments")
+			}
+			if cleanupFails {
+				return uintptr(0x80004005)
+			}
+			return 0
+		})
+		err := s.verifyCreatedTask(&comObject{table: table}, 123, &comObject{table: new([32]uintptr)})
+		if err == nil || !deleted {
+			t.Fatal("failed verification did not roll back new task")
+		}
+		if strings.Contains(err.Error(), "cleanup failed") != cleanupFails {
+			t.Fatal("cleanup failure was not reported")
+		}
+	}
+}

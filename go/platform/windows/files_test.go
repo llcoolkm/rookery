@@ -125,6 +125,41 @@ func TestRecordCapabilityLifetime(t *testing.T) {
 		t.Fatal("closed record admitted")
 	}
 }
+
+func TestProviderRecordRotationAndAncestryRename(t *testing.T) {
+	f, root := testFiles(t)
+	ctx := context.Background()
+	if e := f.AtomicWrite(ctx, root, "record.json", []byte("old")); e != nil {
+		t.Fatal(e)
+	}
+	v, e := f.OpenProviderRecord(ctx, root, "record.json")
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer v.Close()
+	if e = os.Rename(root, root+"-moved"); e != nil {
+		t.Fatal("open record blocked ancestry rename", e)
+	}
+	if recordProvenance(v.(*verifiedFile)) == nil {
+		t.Fatal("record at missing original ancestry admitted")
+	}
+	if e = os.Rename(root+"-moved", root); e != nil {
+		t.Fatal(e)
+	}
+	if recordProvenance(v.(*verifiedFile)) != nil {
+		t.Fatal("restored original identity refused")
+	}
+	if e = f.AtomicWrite(ctx, root, "record.json", []byte("new")); e != nil {
+		t.Fatal("open provider record blocked atomic rotation", e)
+	}
+	if recordProvenance(v.(*verifiedFile)) == nil {
+		t.Fatal("replaced record identity admitted")
+	}
+	got, e := io.ReadAll(v)
+	if e != nil || string(got) != "old" {
+		t.Fatal("open handle did not retain original record", e)
+	}
+}
 func TestRemoveVerifiedHandle(t *testing.T) {
 	f, root := testFiles(t)
 	ctx := context.Background()
