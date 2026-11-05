@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/llcoolkm/rookery/go/platform"
 	"strings"
 	"time"
 )
@@ -14,6 +15,7 @@ type NativeHooks struct {
 	Submit   func(context.Context, Session, Message) (DeliveryResult, error)
 }
 type Helper struct {
+	Process        platform.Process
 	Store          *LocalStore
 	Hub            HubClient
 	Node           string
@@ -296,11 +298,17 @@ func (h *Helper) Cycle(ctx context.Context) error {
 	return h.Deliver(ctx)
 }
 func (h *Helper) Health(ctx context.Context, running bool, cycleErr error) error {
+	pid := 0
+	if h.Process != nil {
+		if ref, e := h.Process.Current(ctx); e == nil {
+			pid = ref.PID
+		}
+	}
 	var detail any
 	if cycleErr != nil {
 		detail = "helper cycle unavailable; requests remain queued"
 	}
-	return h.Store.Put(ctx, "health", map[string]any{"running": running, "connected": running && cycleErr == nil && seconds()-h.lastSync < 40, "updated": seconds(), "node": h.Node, "error": detail, "provider_errors": h.ProviderErrors, "busy_delivery": h.BusyDelivery})
+	return h.Store.Put(ctx, "health", map[string]any{"pid": pid, "running": running, "connected": running && cycleErr == nil && seconds()-h.lastSync < 40, "updated": seconds(), "node": h.Node, "error": detail, "provider_errors": h.ProviderErrors, "busy_delivery": h.BusyDelivery})
 }
 func (h *Helper) Run(ctx context.Context, once bool) error {
 	lock, e := h.Store.Files.AdvisoryLock(ctx, h.Store.Root, "daemon.lock", false)
