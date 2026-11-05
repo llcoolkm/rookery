@@ -259,3 +259,42 @@ func TestServiceExecutableValidation(t *testing.T) {
 		t.Fatal("relative service executable accepted")
 	}
 }
+
+func TestServicePlanMatchesSelectedBackendAndNeverInstalls(t *testing.T) {
+	for _, backend := range []string{"wsl", "systemd", "manual"} {
+		t.Run(backend, func(t *testing.T) {
+			svc, root, target, spec := testWSLService(t)
+			svc.backend = backend
+			svc.controlCommand = func(context.Context, ...string) error { t.Fatal("dry-run contacted service manager"); return nil }
+			result, e := svc.Plan(context.Background(), spec)
+			if e != nil {
+				t.Fatal(e)
+			}
+			plan := result.(map[string]any)
+			content, ok := plan["content"].(string)
+			if !ok || plan["backend"] != backend || plan["started"] != false {
+				t.Fatal("invalid dry-run shape")
+			}
+			switch backend {
+			case "wsl":
+				if !strings.Contains(content, "'service' 'supervise' '--detach'") || !strings.Contains(content, "'HOME="+root+"'") {
+					t.Fatal("WSL plan omitted supervisor target environment")
+				}
+			case "systemd":
+				if !strings.Contains(content, "[Service]") || !strings.Contains(content, "Environment=") {
+					t.Fatal("systemd plan omitted unit or target environment")
+				}
+			case "manual":
+				if !strings.HasSuffix(content, "'daemon'") {
+					t.Fatal("manual plan omitted daemon command")
+				}
+			}
+			if _, e = os.Lstat(target); !os.IsNotExist(e) {
+				t.Fatal("dry-run wrote WSL configuration")
+			}
+			if _, e = os.Lstat(filepath.Join(root, "service.json")); !os.IsNotExist(e) {
+				t.Fatal("dry-run wrote service state")
+			}
+		})
+	}
+}

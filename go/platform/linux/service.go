@@ -115,15 +115,7 @@ func (s *service) Install(ctx context.Context, spec platform.ServiceSpec) error 
 	if e := validateServiceExecutable(spec.Executable); e != nil {
 		return e
 	}
-	backend := s.backend
-	if backend == "" || backend == "auto" {
-		backend = "manual"
-		if _, e := os.Stat("/run/systemd/system"); e == nil {
-			backend = "systemd"
-		} else if s.paths.IsWSL() {
-			backend = "wsl"
-		}
-	}
+	backend := s.selectedBackend()
 	resolved, e := s.resolveAccount(spec)
 	if e != nil {
 		return e
@@ -662,4 +654,72 @@ func validateServiceExecutable(path string) error {
 		return errors.New("service executable must be a native ELF binary")
 	}
 	return nil
+}
+
+func (s *service) selectedBackend() string {
+	backend := s.backend
+	if backend != "" && backend != "auto" {
+		return backend
+	}
+	if info, e := os.Stat("/run/systemd/system"); e == nil && info.IsDir() {
+		return "systemd"
+	}
+	if s.paths.IsWSL() {
+		return "wsl"
+	}
+	return "manual"
+}
+
+// Plan validates and renders startup integration without changing files,
+// contacting a service manager, or starting a supervisor.
+func (s *service) Plan(ctx context.Context, spec platform.ServiceSpec) (any, error) {
+	if e := ctx.Err(); e != nil {
+		return nil, e
+	}
+	if spec.StateDir != s.paths.state {
+		return nil, errors.New("service configuration belongs to another state directory")
+	}
+	if e := validateServiceExecutable(spec.Executable); e != nil {
+		return nil, e
+	}
+	spec, e := s.resolveAccount(spec)
+	if e != nil {
+		return nil, e
+	}
+	backend := s.selectedBackend()
+	content := ""
+	switch backend {
+	case "systemd":
+		uid, _, e := s.accountIDs(spec.Account)
+		if e != nil {
+			return nil, e
+		}
+		if uid != os.Getuid() {
+			return nil, errors.New("systemd user installation requires the current account")
+		}
+		content, e = UserUnit(spec)
+		if e != nil {
+			return nil, e
+		}
+	case "wsl":
+		content, e = WSLBootCommand(spec, spec.Account, spec.Home, spec.SearchPath)
+		if e != nil {
+			return nil, e
+		}
+	case "manual":
+		args := append([]string{spec.Executable, "--state-dir", spec.StateDir}, spec.Arguments...)
+		if len(spec.Arguments) == 0 {
+			args = append(args, "daemon")
+		}
+		for i, arg := range args {
+			if strings.ContainsAny(arg, "\r\n\x00") {
+				return nil, errors.New("service paths must not contain newlines")
+			}
+			args[i] = shellQuote(arg)
+		}
+		content = strings.Join(args, " ")
+	default:
+		return nil, errors.New("invalid service backend")
+	}
+	return map[string]any{"backend": backend, "content": content, "started": false}, nil
 }
