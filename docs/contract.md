@@ -447,3 +447,17 @@ without bodies. These are separate internal observability listener routes, not
 helper authentication or message APIs; public listener does not expose them.
 (`src/rookery/hub.py:766`, `src/rookery/hub.py:887`,
 `src/rookery/hub_http.py:76`.)
+
+## Go Linux fixed control endpoint capability
+
+Codex's control socket has no authoritative endpoint-record format in the Python
+baseline. The Linux platform therefore exposes an optional, fixed provider-owned
+`ControlEndpoint(ctx, "codex")` capability alongside `Paths.HarnessEndpoint`.
+It accepts no address or peer/tool path. The platform selects the conventional
+control socket under its provider root, validates owned/no-follow ancestry and
+socket metadata, connects and pins SO_PEERCRED to process start/boot identity,
+then issues an opaque endpoint handle bound to that identity. Subsequent Dial
+revalidates both metadata and the expected live process. Record-based endpoints
+continue to require the verified record handle and `HarnessEndpoint` provenance
+rules. This exception does not authorize arbitrary endpoint paths or bypass peer
+authentication.

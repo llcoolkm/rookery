@@ -4,7 +4,9 @@ The Go helper is a native client of the existing Python hub's `/v2/rpc` HTTPS
 protocol. Both languages can use one hub. The Python hub stays authoritative;
 there is no hub rewrite in this plan. [contract.md](contract.md) defines the
 Python 0.3.1 baseline, including compact MCP results and irreversible delivery
-claims. Phase 1 is a contract and compilable skeleton, not a working helper.
+claims. Phase 1 established the contract and skeleton. Phase 2 now implements the Go
+core, Linux platform, Codex/Claude routes and CLI; isolated tests pass. Native
+harness and live-hub acceptance remain required before declaring Linux parity.
 
 ## Phases and acceptance gates
 
@@ -138,12 +140,13 @@ it cannot expand user authorization.
 
 ## Open questions for review
 
-- Choose exact independent Go state roots and environment-variable precedence on
-  Linux, WSL and Windows; decide how explicit Python configuration import works
-  without copying in-flight commands or enabling duplicate claims.
-- Choose the Go durable store backend and transaction/flush semantics. The
-  standard library has no SQLite driver; adding one must be justified against a
-  bounded journal design, recovery complexity and Windows durability requirements.
+- Linux/WSL roots are now resolved: explicit `--state-dir`, then
+  `ROOKERY_GO_HOME`, then `$XDG_STATE_HOME/rookery-go`, otherwise a `rookery-go`
+  directory below the current account's local state root. `ROOKERY_HOME` is ignored.
+  Windows roots and any explicit Python configuration import remain deferred.
+- Linux uses a dependency-free atomic JSON snapshot under an advisory lock.
+  Windows must demonstrate equivalent replacement/flush semantics before phase 3
+  acceptance; the Linux implementation is not evidence of Windows durability.
 - Verify actual Windows Codex/Claude endpoint transports and discoverable
   per-session process identity. Do not assume Linux socket paths or undocumented
   provider records apply on Windows.
@@ -159,3 +162,196 @@ it cannot expand user authorization.
   remain separate from phase 1.
 - Agree an isolated live-hub acceptance procedure for phase 2 and native Windows
   provider test coverage for phase 3. Cross-build success is not runtime proof.
+
+## Phase 2 implementation and evidence
+
+The Go helper is implemented in `go/core`, `go/platform/linux`, `go/helper`,
+`go/provider/codex`, `go/provider/claude` and `go/cmd/rookery`. The module still
+has no third-party runtime dependencies. The Python hub remains authoritative.
+
+`store.json` is the Go store and durable outgoing spool. Each mutation reloads
+under `admission.lock`, commits a private temporary file, fsyncs it, renames it,
+and fsyncs the parent. There is no separate import interval: all admitted commands
+are visible to pending-read inspection immediately. Results and command deletion
+share that transaction; sync alone updates authoritative message snapshots.
+Commands retain their request identity and absolute expiry through retries.
+Native result reports also have a UUIDv7 persisted before submission and reused
+for every report retry.
+Queue admission preserves the 1000-command/32 MiB limits. Individual commands
+are bounded to 1 MiB, and the complete snapshot is bounded to 256 MiB. Corrupt or
+oversized state fails closed. This favors a small auditable recovery protocol
+over indexed large-store performance; it is not SQLite on-disk compatibility.
+Python helper markers are refused before the Go store opens its lock.
+
+Native attempts persist before submission, preserve the process pin through
+rediscovery, and persist a redacted result before reporting. Unfinished attempts
+recover as uncertain. Uncertain/non-held attempts block further local claims;
+only held attempts can be retried. Pending reads suppress claims and are checked
+again after rediscovery. Bootstrap pins its initial high-water cursor and commits
+it only with the final page. Delayed command responses cannot overwrite sync.
+
+The CLI provides configure, daemon (`--once`), mcp (`--provider`/`--session`),
+send, reply, ack, inbox (`--peek`), status, list, enroll, disable, clear-alias,
+register-polling, unregister-polling, health, doctor, busy-delivery, wait,
+Codex/Claude install and service lifecycle commands. State is independent of
+Python. The service unit is `rookery-go.service`, using the systemd user manager.
+The WSL fallback has a pinned supervisor, bounded rotating logs, backoff and
+secure boot-config installation. It preserves unrelated boot commands and an
+original backup; uninstall removes only its exact command. These are tested
+against injected temporary paths, not an actual WSL boot.
+
+Contract tests execute the native renderer, MCP calls and bounded framing,
+UUIDv7 timestamps, local command durability, and hub-client wire exchanges.
+`go/integration` starts `uv run --frozen --extra hub rookery hub serve` on
+loopback with temporary state and generated test credentials, then runs Go and
+Python helper engines side by side. It proves cross-delivery/replies, host/read/
+ack receipts, committed-but-lost response retry, expiry, the six-message limit,
+polling admission and crash recovery without uncertain replay. Provider tests
+use authenticated fake AF_UNIX Codex control and Claude messaging sockets.
+Tests do not consult real harness histories, configuration, credentials, helper
+state or a live hub. CI runs the integration and Linux race suite; Windows has
+an explicit integration skip until phase 3. The OS-import gate remains enforced.
+
+### Remaining parity and acceptance gaps
+
+- **Native acceptance is outstanding.** Synthetic socket protocols and local hub
+  compatibility do not prove compatibility with any installed harness version,
+  actual busy-turn behavior, real restart/reconnect behavior, or WSL startup.
+- **Codex private input depends on harness support.** Python's baseline documents
+  only `queue --message` argv. Go probes `queue --help` and submits the body on
+  stdin only when the exact `--message-stdin` option is advertised. Otherwise it
+  reports held before submission. It never assumes `--message -` means stdin;
+  private-file queue options are not implemented. This is a deliberate,
+  documented native-delivery gap for baseline builds.
+- **Claude needs a verified socket record.** Go uses the verified owned
+  `sessions/<pid>.json` record and its `messagingSocketPath`; it does not guess a
+  socket when that record/address is absent. Missing evidence prevents push.
+- **Native executable requirement.** Linux execution requires a native ELF
+  executable; npm/shebang launchers and shell fallbacks are refused. Put the
+  actual native provider executable on PATH. Native packaging must be validated
+  on the acceptance host.
+- **Installer differences.** Existing MCP entries are preserved. Claude's text
+  listing cannot prove exact argv boundaries. Existing provider settings must be
+  private; Python can preserve broader existing modes. Go supplies an old-tool
+  grant note but does not inspect historical permission grants individually.
+- **Service installation constraints.** Systemd user installation targets the
+  current account and does not enable lingering. WSL boot-config installation
+  needs root privileges. A sudo install for another account supports only a fresh
+  empty state directory with verified target-owned ancestry; existing target-owned
+  state is refused by the host ownership boundary. Prepare boot integration
+  separately for existing state. Actual WSL boot and user-manager startup remain
+  native acceptance gates.
+- **Polling layout differs.** Go uses private flat `polling-PROVIDER-UUID.json`
+  records containing a full ProcessRef. It does not import Python registrations.
+- **Scheduling/performance differs.** The Go daemon currently cycles sync and
+  delivery sequentially rather than using Python's independent long-poll sync
+  thread. Large local snapshots incur whole-file transactions; high-volume and
+  long-offline operation need additional performance validation.
+- **Deferred functionality.** AGY native attach/detach and hooks remain phase 4;
+  Windows runtime remains phase 3. Provider plugins, configuration migration,
+  artifact packaging/signing and release remain outside phase 2.
+
+### Live-server acceptance procedure (Claude runs this)
+
+Do not infer approval from the isolated tests. Use two newly created, disjoint
+native harness sessions and dedicated authorized test nodes on the existing
+hub; leave ordinary enrolled sessions out of these tests. Supply these values
+locally without saving them to the public repository or transcript:
+`HUB_ORIGIN`, `GO_NODE`, `PY_NODE`, private `GO_TOKEN_FILE`/`PY_TOKEN_FILE`, and
+local `GO_SESSION`/`PY_SESSION` addresses. Select Codex for one session and Claude
+for the other, then repeat with the Go recipient on the other provider. Before
+push testing, establish that the native binaries, socket records and Codex stdin
+flag meet the constraints above. An unsupported Codex build is a recorded held
+outcome, not a passed push gate.
+
+From the reviewed bundle checkout, with `GO_BIN` an absolute temporary binary:
+
+```sh
+(cd go && go build -o "$GO_BIN" ./cmd/rookery)
+GO_STATE=$(mktemp -d)
+PY_STATE=$(mktemp -d)
+chmod 700 "$GO_STATE" "$PY_STATE"
+"$GO_BIN" --state-dir "$GO_STATE" configure --node "$GO_NODE" \
+  --url "$HUB_ORIGIN" --token-file "$GO_TOKEN_FILE"
+uv run --frozen --extra hub rookery --state-dir "$PY_STATE" configure \
+  --node "$PY_NODE" --url "$HUB_ORIGIN" --token-file "$PY_TOKEN_FILE"
+"$GO_BIN" --state-dir "$GO_STATE" daemon >"$GO_STATE/daemon.log" 2>&1 &
+GO_DAEMON=$!
+uv run --frozen --extra hub rookery --state-dir "$PY_STATE" daemon \
+  >"$PY_STATE/daemon.log" 2>&1 &
+PY_DAEMON=$!
+"$GO_BIN" --state-dir "$GO_STATE" list
+uv run --frozen --extra hub rookery --state-dir "$PY_STATE" list
+```
+
+Wait until those two fresh sessions are visible at their intended nodes. Then:
+
+```sh
+"$GO_BIN" --state-dir "$GO_STATE" enroll "$GO_SESSION" --alias go-check
+uv run --frozen --extra hub rookery --state-dir "$PY_STATE" \
+  enroll "$PY_SESSION" --alias python-check
+"$GO_BIN" --state-dir "$GO_STATE" --as "$GO_SESSION" send \
+  --to "$PY_NODE/python-check" --body 'Reply once with a short acceptance result.'
+uv run --frozen --extra hub rookery --state-dir "$PY_STATE" --as "$PY_SESSION" \
+  send --to "$GO_NODE/go-check" --body 'Reply once with a short acceptance result.'
+```
+
+Capture each returned message ID privately as `GO_MESSAGE_ID` and
+`PY_MESSAGE_ID`. Inspect the corresponding sender/recipient views with:
+
+```sh
+"$GO_BIN" --state-dir "$GO_STATE" --as "$GO_SESSION" status "$GO_MESSAGE_ID"
+uv run --frozen --extra hub rookery --state-dir "$PY_STATE" --as "$PY_SESSION" \
+  status "$PY_MESSAGE_ID"
+"$GO_BIN" --state-dir "$GO_STATE" --as "$GO_SESSION" inbox --peek
+"$GO_BIN" --state-dir "$GO_STATE" --as "$GO_SESSION" inbox
+```
+
+In each native session, verify one
+arrival with the canonical two/three-line rendered envelope and answer using its
+Rookery reply tool. Inspect `status MESSAGE_ID` on the sender; require submitted
+without claiming model receipt, then read/ack or actual reply evidence. Test
+`inbox --peek` versus non-peek separately. Stop/restart the Go daemon and verify
+that completed or uncertain native attempts are not resubmitted. Pause the
+recipient beyond a short send TTL and require expiry without late input.
+Verify Codex busy is held; verify Claude busy obeys startup busy-delivery policy,
+and that changing the setting requires restart. For each provider, repeat MCP
+identity checks from the actual harness, including an absent/conflicting identity
+that must return JSON-RPC -32602. Register a separate fresh session for polling,
+verify inbox receipt/read/ack, and require no native push. Retain sanitized
+outcomes only; no message bodies or actual identity/credential values in public
+evidence.
+
+For a concrete restart and expiry check (after the two ordinary exchanges):
+
+```sh
+kill "$GO_DAEMON"
+wait "$GO_DAEMON"
+"$GO_BIN" --state-dir "$GO_STATE" daemon >>"$GO_STATE/daemon.log" 2>&1 &
+GO_DAEMON=$!
+kill "$PY_DAEMON"
+wait "$PY_DAEMON"
+"$GO_BIN" --state-dir "$GO_STATE" --as "$GO_SESSION" send \
+  --to "$PY_NODE/python-check" --ttl 1 --kind inform --body 'Expired acceptance probe.'
+sleep 2
+uv run --frozen --extra hub rookery --state-dir "$PY_STATE" daemon \
+  >>"$PY_STATE/daemon.log" 2>&1 &
+PY_DAEMON=$!
+```
+
+Require no duplicate native arrival after restart and no native arrival of the
+expired probe. Inspect that probe's returned ID via status and its recipient's
+peek inbox; expired unread mail should remain visible until fetched once.
+
+Cleanup only these test enrollments and the processes started above:
+
+```sh
+"$GO_BIN" --state-dir "$GO_STATE" disable "$GO_SESSION"
+uv run --frozen --extra hub rookery --state-dir "$PY_STATE" disable "$PY_SESSION"
+kill "$GO_DAEMON" "$PY_DAEMON"
+wait "$GO_DAEMON" "$PY_DAEMON"
+```
+
+Keep the private temporary roots until Claude finishes reviewing uncertain-attempt
+evidence. Publication, replacement of the Python helper and claiming ordinary
+live sessions remain separate decisions.
