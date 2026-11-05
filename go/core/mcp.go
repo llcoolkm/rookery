@@ -154,6 +154,21 @@ func validID(v any) bool {
 	if _, ok := v.(string); ok {
 		return true
 	}
+	if n, ok := v.(json.Number); ok {
+		text := string(n)
+		if strings.HasPrefix(text, "-") {
+			text = text[1:]
+		}
+		if text == "" {
+			return false
+		}
+		for _, r := range text {
+			if r < '0' || r > '9' {
+				return false
+			}
+		}
+		return true
+	}
 	_, ok := numberInteger(v)
 	return ok
 }

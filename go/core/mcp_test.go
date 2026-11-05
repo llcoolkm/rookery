@@ -124,3 +124,14 @@ func TestMCPFrameBoundaryAndIDs(t *testing.T) {
 		t.Fatalf("valid boundary frame rejected: %s", output.String())
 	}
 }
+
+func TestMCPUnboundedIntegerRequestID(t *testing.T) {
+	var out bytes.Buffer
+	frame := `{"jsonrpc":"2.0","id":9999999999999999999999999999999999,"method":"ping"}` + "\n"
+	if err := NewMCP(nil, nil).Serve(context.Background(), strings.NewReader(frame), &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), `"result":{}`) || !strings.Contains(out.String(), `9999999999999999999999999999999999`) {
+		t.Fatalf("integer ID changed: %s", out.String())
+	}
+}
