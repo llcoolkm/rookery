@@ -335,6 +335,69 @@ chmod 700 "$GO_STATE" "$PY_STATE"
   --url "$HUB_ORIGIN" --token-file "$GO_TOKEN_FILE"
 uv run --frozen --extra hub rookery --state-dir "$PY_STATE" configure \
   --node "$PY_NODE" --url "$HUB_ORIGIN" --token-file "$PY_TOKEN_FILE"
+```
+
+Bind each fresh harness session to its own helper before starting it. Codex
+MUST use a separate CODEX_HOME with only the intended test MCP server, and an
+empty trusted working directory **outside the user's home**. Trusting the home
+can load its `.codex/config.toml` as project configuration, reintroducing
+production MCP entries and permissions. Do not use `-c`, `--enable`, `--disable`
+or `--search` for MCP isolation: configuration overrides force embedded mode,
+which prevents shared-daemon discovery
+([upstream `daemon_startup.rs:90-124`](https://github.com/openai/codex/blob/rust-v0.166.0/codex-rs/tui/src/daemon_startup.rs#L90-L124)).
+
+Prepare a distinct home/config for each Codex test session and keep those values
+private. For the Go recipient, prepare the following before starting the Go daemon;
+its exported CODEX_HOME must also be present at every Go daemon restart. Substitute the Python helper and PY_STATE when testing the
+Python Codex recipient, keeping each provider home separate:
+
+```sh
+umask 077
+CODEX_HOME=$(mktemp -d /tmp/rookery-codex-home.XXXXXXXX)
+CODEX_WORKDIR=$(mktemp -d /tmp/rookery-codex-work.XXXXXXXX)
+export CODEX_HOME CODEX_WORKDIR
+uv run python - "$GO_BIN" "$GO_STATE" <<'PYCONFIG'
+import json
+import os
+import pathlib
+import sys
+
+quote = lambda value: json.dumps(value, ensure_ascii=False)
+config = (
+    '[mcp_servers.rookery-go]\n'
+    f'command = {quote(sys.argv[1])}\n'
+    f'args = {quote(["--state-dir", sys.argv[2], "mcp", "--provider", "codex"])}\n'
+    f'\n[projects.{quote(os.environ["CODEX_WORKDIR"])}]\n'
+    'trust_level = "trusted"\n'
+)
+path = pathlib.Path(os.environ["CODEX_HOME"]) / "config.toml"
+path.write_text(config, encoding="utf-8")
+path.chmod(0o600)
+PYCONFIG
+```
+
+Start the Codex harness from that empty trusted directory with the same
+CODEX_HOME and no command-line configuration overrides:
+
+```sh
+(cd "$CODEX_WORKDIR" && codex)
+```
+
+Confirm it uses the shared daemon and publishes the owned control rendezvous
+symlink described in [the endpoint contract](contract.md#verified-unix-rendezvous-layout-phase-2e).
+Do not copy production configuration, authentication files or session history
+into the test home; authenticate the disposable account separately if required.
+
+For Claude, create a 0600 temporary JSON config with only
+`{"mcpServers":{"rookery-go":{"command":"<absolute helper>","args":["--state-dir","<test state>","mcp","--provider","claude"]}}}`
+using a JSON encoder, save its path as `GO_MCP_CONFIG` or `PY_MCP_CONFIG`, then launch
+`claude --mcp-config "$GO_MCP_CONFIG" --strict-mcp-config` (use the Python
+config for that session).
+Create a distinct config for the Python session with its Python helper executable
+and `PY_STATE`. The strict config prevents inherited `rookery` entries.
+With the Go recipient's CODEX_HOME exported in the daemon shell, start the helpers:
+
+```sh
 "$GO_BIN" --state-dir "$GO_STATE" daemon >"$GO_STATE/daemon.log" 2>&1 &
 GO_DAEMON=$!
 uv run --frozen --extra hub rookery --state-dir "$PY_STATE" daemon \
@@ -344,23 +407,8 @@ PY_DAEMON=$!
 uv run --frozen --extra hub rookery --state-dir "$PY_STATE" list
 ```
 
-Bind each fresh harness session to its own helper before starting it. For
-Codex use a per-invocation override (substitute the intended helper and state):
-
-```sh
-codex -c 'mcp_servers.rookery.enabled=false' \
-  -c "mcp_servers.rookery-go={command=\"$GO_BIN\",args=[\"--state-dir\",\"$GO_STATE\",\"mcp\",\"--provider\",\"codex\"]}"
-```
-
-For Claude, create a 0600 temporary JSON config with only
-`{"mcpServers":{"rookery-go":{"command":"<absolute helper>","args":["--state-dir","<test state>","mcp","--provider","claude"]}}}`
-using a JSON encoder, save its path as `GO_MCP_CONFIG` or `PY_MCP_CONFIG`, then launch
-`claude --mcp-config "$GO_MCP_CONFIG" --strict-mcp-config` (use the Python
-config for that session).
-Create a distinct config for the Python session with its Python helper executable
-and `PY_STATE`. The strict config prevents inherited `rookery` entries. Confirm
-the tool list shows only the intended test server. Capture session IDs privately,
-configure the Go allowlist with exactly its test session, then restart:
+Confirm the tool list shows only the intended test server. Capture session IDs
+privately, configure the Go allowlist with exactly its test session, then restart:
 
 ```sh
 "$GO_BIN" --state-dir "$GO_STATE" configure --node "$GO_NODE" \
@@ -499,3 +547,20 @@ provenance and strict helper socket modes. Redacted-log tests verify fixed codes
 and exclusion from serialized and hub results. Whitespace and added-line privacy
 checks passed. No live hub, live harness sessions or real credentials were used;
 installed-harness acceptance remains outstanding.
+
+### Phase 2e verification
+
+The control-rendezvous fix passed all 310 Python tests, `go vet ./...`,
+`go test ./...`, `go test -race ./...`, cgo-disabled Linux and Windows builds,
+and the portable OS-import gate for both targets. Synthetic filesystem tests
+cover authenticated single-link control endpoints, long advertised paths,
+group/other-accessible target directories, multiple links, unsafe ancestry,
+foreign ownership policy, changed ProcessRef pins, and target/link replacement.
+The target replacement test retains the original listener and confirms that
+connect reaches its pinned inode before post-connect verification refuses the
+replacement. A filesystem foreign-owner test runs when lchown is available;
+synthetic ownership checks run without that privilege. Helper and record-based
+endpoints still reject links. Discovery-log tests verify fixed redacted reasons.
+Whitespace and added-line/new-file privacy checks passed. No live hub, harness
+sessions, real state or credentials were used; installed-harness and native
+Windows acceptance remain unverified.

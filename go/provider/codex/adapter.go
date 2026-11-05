@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"strings"
 	"sync"
 	"time"
@@ -17,6 +18,27 @@ import (
 const IdentityError = "Codex caller identity unavailable or inconsistent. Reconnect MCP with a compatible Codex version, or use an explicit per-session binding."
 
 var errDiscovery = errors.New("Codex session discovery unavailable")
+
+type discoveryError struct{ reason string }
+
+func (e *discoveryError) Error() string { return errDiscovery.Error() }
+func (e *discoveryError) Unwrap() error { return errDiscovery }
+
+func controlDiscoveryError(err error) error {
+	if errors.Is(err, platform.ErrControlEndpointUnsafe) {
+		return &discoveryError{reason: "control_endpoint_unsafe"}
+	}
+	return errDiscovery
+}
+
+func logDiscovery(err error) {
+	reason := "discovery_unavailable"
+	var failure *discoveryError
+	if errors.As(err, &failure) && failure.reason == "control_endpoint_unsafe" {
+		reason = failure.reason
+	}
+	log.Printf("provider discovery failed provider=codex reason=%s", reason)
+}
 
 // rpcError records a structurally valid remote error without exposing its text.
 // A queue error may follow persistence; it is not proof of non-submission.
@@ -108,7 +130,7 @@ func (a *Adapter) open(ctx context.Context) (*proxy, error) {
 			var err error
 			ep, err = p.ControlEndpoint(ctx, "codex")
 			if err != nil {
-				return nil, errDiscovery
+				return nil, controlDiscoveryError(err)
 			}
 		}
 	}
@@ -117,7 +139,7 @@ func (a *Adapter) open(ctx context.Context) (*proxy, error) {
 	}
 	conn, err := a.ipc.Dial(ctx, ep)
 	if err != nil {
-		return nil, errDiscovery
+		return nil, controlDiscoveryError(err)
 	}
 	if err = conn.SetDeadline(time.Now().Add(8 * time.Second)); err != nil {
 		conn.Close()
@@ -225,7 +247,12 @@ func Normalize(t Thread) core.Session {
 	}
 	return core.Session{Provider: "codex", ID: t.ID, Name: name, Status: status}
 }
-func (a *Adapter) Discover(ctx context.Context) ([]core.Session, error) {
+func (a *Adapter) Discover(ctx context.Context) (rowsOut []core.Session, discoveryErr error) {
+	defer func() {
+		if discoveryErr != nil {
+			logDiscovery(discoveryErr)
+		}
+	}()
 	if a.config.SessionAllowlist != nil {
 		allowed := false
 		for _, id := range a.config.SessionAllowlist {

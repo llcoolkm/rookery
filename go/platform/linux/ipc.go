@@ -83,26 +83,36 @@ func (i *ipc) Dial(ctx context.Context, handle platform.Endpoint) (platform.Conn
 	if err != nil {
 		return nil, err
 	}
-	checkSocket := socketSafe
-	if e.helper {
-		checkSocket = socketPrivate
-	}
-	if err = checkSocket(e.path); err != nil {
-		return nil, err
-	}
-	if e.expected != nil {
-		if err = i.paths.process.Pin(ctx, *e.expected); err != nil {
+	var out platform.Connection
+	if e.control {
+		verified, verifyErr := verifyControlSocket(e.path)
+		if verifyErr != nil {
+			return nil, verifyErr
+		}
+		defer verified.close()
+		out, err = i.dialControl(ctx, e, verified)
+	} else {
+		checkSocket := socketSafe
+		if e.helper {
+			checkSocket = socketPrivate
+		}
+		if err = checkSocket(e.path); err != nil {
 			return nil, err
 		}
-	}
-	dialer := net.Dialer{}
-	c, err := dialer.DialContext(ctx, "unix", e.path)
-	if err != nil {
-		return nil, errors.New("local endpoint unavailable")
-	}
-	out, err := i.authenticate(ctx, c.(*net.UnixConn), e.expected)
-	if err == nil {
-		err = checkSocket(e.path)
+		if e.expected != nil {
+			if err = i.paths.process.Pin(ctx, *e.expected); err != nil {
+				return nil, err
+			}
+		}
+		dialer := net.Dialer{}
+		c, dialErr := dialer.DialContext(ctx, "unix", e.path)
+		if dialErr != nil {
+			return nil, errors.New("local endpoint unavailable")
+		}
+		out, err = i.authenticate(ctx, c.(*net.UnixConn), e.expected)
+		if err == nil {
+			err = checkSocket(e.path)
+		}
 	}
 	if err != nil {
 		if out != nil {

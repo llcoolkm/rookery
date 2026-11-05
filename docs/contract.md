@@ -456,13 +456,66 @@ Codex's control socket has no authoritative endpoint-record format in the Python
 baseline. The Linux platform therefore exposes an optional, fixed provider-owned
 `ControlEndpoint(ctx, "codex")` capability alongside `Paths.HarnessEndpoint`.
 It accepts no address or peer/tool path. The platform selects the conventional
-control socket under its provider root, validates owned/no-follow ancestry and
-socket metadata, connects and pins SO_PEERCRED to process start/boot identity,
+control socket under its provider root, validates ancestry and socket metadata
+with the narrow Unix rendezvous exception below, connects and pins SO_PEERCRED
+to process start/boot identity,
 then issues an opaque endpoint handle bound to that identity. Subsequent Dial
 revalidates both metadata and the expected live process. Record-based endpoints
 continue to require the verified record handle and `HarnessEndpoint` provenance
 rules. This exception does not authorize arbitrary endpoint paths or bypass peer
 authentication.
+
+
+### Verified Unix rendezvous layout (phase 2e)
+
+The upstream `openai/codex` tag `rust-v0.166.0`, commit
+`6ff1e1ca3b30fc8b914720681fcf5fe62e95f856`, deliberately publishes
+`$CODEX_HOME/app-server-control/app-server-control.sock` as a symlink on Unix.
+This happens for ordinary and long homes alike; it is not a conditional fallback.
+The daemon derives its advertised endpoint from `CODEX_HOME`
+([`app-server-daemon/src/lib.rs:351-357`](https://github.com/openai/codex/blob/rust-v0.166.0/codex-rs/app-server-daemon/src/lib.rs#L351-L357),
+[`transport/mod.rs:56-72`](https://github.com/openai/codex/blob/rust-v0.166.0/codex-rs/app-server-transport/src/transport/mod.rs#L56-L72)).
+
+The Unix binder creates an advertised parent with mode 0700 if absent, validates
+its owner/write permissions, prepares the protected directory, binds there,
+sets socket mode 0600, then creates the advertised symlink to that absolute
+physical path. The symlink and socket are created by the daemon user. See
+[`unix_socket.rs:69-145`](https://github.com/openai/codex/blob/rust-v0.166.0/codex-rs/app-server-transport/src/transport/unix_socket.rs#L69-L145)
+and [`unix_socket.rs:497-505`](https://github.com/openai/codex/blob/rust-v0.166.0/codex-rs/app-server-transport/src/transport/unix_socket.rs#L497-L505).
+The target is canonical `/tmp` plus `codex-daemon-<effective uid>/<64 lowercase hex>`.
+The basename is SHA-256 of the raw Unix bytes of the canonical advertised parent
+joined with the advertised filename, not a random token
+([`unix_socket.rs:353-367`](https://github.com/openai/codex/blob/rust-v0.166.0/codex-rs/app-server-transport/src/transport/unix_socket.rs#L353-L367)).
+The shared directory is independent of HOME, TMPDIR and CODEX_HOME; upstream
+creates it with 0700 and rejects symlinks, foreign ownership or any mode other
+than 0700
+([`daemon_directory.rs:1-38`](https://github.com/openai/codex/blob/rust-v0.166.0/codex-rs/uds/src/daemon_directory.rs#L1-L38)).
+The short physical path avoids the Unix `sun_path` limit (108 bytes on Linux);
+the upstream client retries with the canonical target when the advertised path
+is too long
+([`uds/src/lib.rs:166-174`](https://github.com/openai/codex/blob/rust-v0.166.0/codex-rs/uds/src/lib.rs#L166-L174)).
+
+Go MUST retain direct owned socket support and permit only one symlink at the
+fixed control path. The link itself MUST be owned by the current user, beneath
+verified private CODEX_HOME ancestry. Its target MUST be absolute, with no further
+symlinks in any component. The target's immediate parent MUST be a current-user
+owned directory with mode 0700; higher ancestors MUST satisfy existing StrictModes
+ownership and write checks, including the root-owned sticky `/tmp` exception.
+The final object MUST be a socket owned by the current user. Verification MUST
+resolve only the permitted link, lstat every target component, connect to the
+verified target, then re-verify link/target identities and authenticate SO_PEERCRED
+with the same uid and pinned ProcessRef. A replacement at any checked boundary
+MUST fail closed. The exception MUST NOT apply to other provider or record paths.
+Discovery failure diagnostics MUST use fixed redacted local reason codes, such as
+`control_endpoint_unsafe`, without endpoint paths, process or thread identifiers,
+upstream error text or new hub-visible details.
+
+Windows has no equivalent rendezvous symlink in this source: its branch prepares
+a private advertised parent, validates the path while holding a directory guard,
+and binds directly. Unix symlink creation is explicitly `cfg(unix)`
+([`unix_socket.rs:114-145`](https://github.com/openai/codex/blob/rust-v0.166.0/codex-rs/app-server-transport/src/transport/unix_socket.rs#L114-L145)).
+The Go Windows boundary remains unchanged; native Windows acceptance remains
+unverified.
 
 
 ## Go Codex control-socket delivery (phase 2c)

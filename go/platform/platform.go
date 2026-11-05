@@ -11,6 +11,10 @@ import (
 	"time"
 )
 
+// ErrControlEndpointUnsafe reports a refused control endpoint without exposing
+// its address, ownership, or process details to portable provider code.
+var ErrControlEndpointUnsafe = errors.New("unsafe control endpoint")
+
 // Connection carries OS credentials captured and pinned before Accept/Dial return.
 // Peer returns that original ProcessRef, never a fresh lookup of a reused PID.
 // Process exit/identity change invalidates use; inability to pin fails closed.
@@ -34,7 +38,8 @@ type Endpoint string
 
 // IPC supports AF_UNIX or secured Windows pipes. Listen protects the endpoint
 // before accepting. Dial authenticates the server: Linux uses SO_PEERCRED plus
-// socket owner/no-symlink checks; Windows pipes use GetNamedPipeServerProcessId
+// socket owner/no-symlink checks (with a verified single-link exception for the
+// fixed Codex control rendezvous); Windows pipes use GetNamedPipeServerProcessId
 // plus token SID and endpoint owner/DACL. Capture a pinned ProcessRef in both
 // directions and compare the expected principal and any expected harness server.
 // Revalidate owner/no-follow and identity at connect to prevent substitution.

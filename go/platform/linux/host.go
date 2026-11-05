@@ -19,6 +19,7 @@ type endpoint struct {
 	path     string
 	expected *platform.ProcessRef
 	helper   bool
+	control  bool
 }
 type paths struct {
 	state     string
@@ -185,14 +186,16 @@ func (p *paths) ControlEndpoint(ctx context.Context, provider string) (platform.
 		return "", e
 	}
 	path := filepath.Join(root, "app-server-control", "app-server-control.sock")
-	if e = socketSafe(path); e != nil {
+	verified, e := verifyControlSocket(path)
+	if e != nil {
 		return "", e
 	}
+	verified.close()
 	// Reuse a live pinned capability. Authentication belongs to the actual
 	// protocol connection, avoiding a throwaway raw connection to the server.
 	p.mu.Lock()
 	for handle, ep := range p.endpoints {
-		if ep.path == path && !ep.helper {
+		if ep.path == path && ep.control {
 			if ep.expected == nil || p.process.Pin(ctx, *ep.expected) == nil {
 				p.mu.Unlock()
 				return handle, nil
@@ -201,5 +204,5 @@ func (p *paths) ControlEndpoint(ctx context.Context, provider string) (platform.
 		}
 	}
 	defer p.mu.Unlock()
-	return p.issueLocked(endpoint{path: path})
+	return p.issueLocked(endpoint{path: path, control: true})
 }
