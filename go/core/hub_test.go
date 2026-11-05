@@ -73,3 +73,21 @@ func TestOrigin(t *testing.T) {
 		t.Fatal("encoding")
 	}
 }
+
+func TestUnknownNodeRetainsRequestAndExplainsRegistration(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = io.WriteString(w, `{"error":"private response detail"}`)
+	}))
+	defer server.Close()
+	hub, err := NewHTTPHub(server.URL, strings.Repeat("x", 32), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hub.Node = "alpha"
+	_, err = hub.Call(context.Background(), RPCRequest{Op: "list"})
+	want := "hub does not recognise node alpha (HTTP 401): ask the hub operator to add this node's token hash; see docs/operations.md#adding-a-node"
+	if err == nil || Definite(err) || err.Error() != want {
+		t.Fatalf("unexpected 401 outcome: %v", err)
+	}
+}

@@ -382,6 +382,10 @@ func (h *Helper) Health(ctx context.Context, running bool, cycleErr error) error
 	if syncErr != nil {
 		detail = "helper sync unavailable; requests remain queued"
 	}
+	var unknown *UnknownNodeError
+	if errors.As(cycleErr, &unknown) || errors.As(syncErr, &unknown) {
+		detail = (&UnknownNodeError{Node: h.Node}).Error()
+	}
 	return h.Store.Put(ctx, "health", map[string]any{"pid": pid, "running": running, "connected": running && cycleErr == nil && syncErr == nil && seconds()-lastSync < 40, "updated": seconds(), "node": h.Node, "error": detail, "provider_errors": h.ProviderErrors, "busy_delivery": h.BusyDelivery})
 }
 func (h *Helper) Run(ctx context.Context, once bool) error {
@@ -393,7 +397,7 @@ func (h *Helper) Run(ctx context.Context, once bool) error {
 	if e = h.Store.RecoverAttempts(ctx); e != nil {
 		return e
 	}
-	defer h.Health(context.Background(), false, nil)
+	defer func() { _ = h.Health(context.Background(), false, e) }()
 	if once {
 		e = h.Cycle(ctx)
 		_ = h.Health(ctx, false, e)

@@ -371,3 +371,28 @@ func TestHelperBackgroundLongPollDoesNotBlockRequestsOrRelist(t *testing.T) {
 		t.Fatal("idle helper relisted or long poll blocked command upload", lists, requests, syncs)
 	}
 }
+
+func TestUnknownNodeHealthAfterOnce(t *testing.T) {
+	ctx := context.Background()
+	store := newStore(t)
+	h := &core.Helper{Store: store, Node: "alpha", Hub: helperHub{call: func(context.Context, core.RPCRequest) (json.RawMessage, error) {
+		return nil, &core.UnknownNodeError{Node: "alpha"}
+	}}}
+	err := h.Run(ctx, true)
+	want := "hub does not recognise node alpha (HTTP 401): ask the hub operator to add this node's token hash; see docs/operations.md#adding-a-node"
+	if err == nil || core.Definite(err) || err.Error() != want {
+		t.Fatalf("unexpected daemon error: %v", err)
+	}
+	var health map[string]any
+	found, err := store.Get(ctx, "health", &health)
+	if err != nil || !found || health["error"] != want || health["connected"] != false {
+		t.Fatalf("health lost registration instructions: %v %v", health, err)
+	}
+	if err := h.Health(ctx, true, errors.New("private diagnostic")); err != nil {
+		t.Fatal(err)
+	}
+	_, _ = store.Get(ctx, "health", &health)
+	if health["error"] != "helper cycle unavailable; requests remain queued" {
+		t.Fatal("untrusted error escaped health sanitization")
+	}
+}

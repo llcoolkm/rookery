@@ -416,7 +416,8 @@ That Python gap is documented, not compatibility behavior to reproduce.
 | Inactive ack | `message is no longer active` | `src/rookery/hub.py:652` |
 | Other session local status | `message belongs to another session` | `src/rookery/client.py:191` |
 | Local queue full | `local outgoing queue is full; wait for the helper to reconnect` | `src/rookery/client.py:102` |
-| Retryable HTTP failure | `hub HTTP N; requests remain queued` (N is the numeric status) | `src/rookery/daemon.py:46` |
+| HTTP 401 at helper | `hub does not recognise node NODE (HTTP 401): ask the hub operator to add this node's token hash; see docs/operations.md#adding-a-node` (NODE is the configured node; retain original commands) | `src/rookery/daemon.py:38` |
+| Other retryable HTTP failure | `hub HTTP N; requests remain queued` (N is the numeric status) | `src/rookery/daemon.py:46` |
 | Oversized / malformed hub response | `hub response too large` / `invalid hub response` | `src/rookery/daemon.py:55`, `src/rookery/daemon.py:62` |
 | Network / interrupted response | `hub unavailable; requests remain queued` / `hub response interrupted; original request retained` | `src/rookery/daemon.py:48`, `src/rookery/daemon.py:53` |
 | MCP invalid JSON / frame | JSON-RPC −32700 `Parse error` / `Message exceeds size limit` | `src/rookery/mcp.py:262`, `src/rookery/mcp.py:268` |
@@ -438,10 +439,28 @@ including configure, daemon, mcp, service, list, enroll, disable, clear-alias,
 send, reply, ack, inbox, status, doctor, register-polling, unregister-polling,
 attach, detach, busy-delivery, install, agy-hook, health and wait. Global state and
 actor binding flags retain their spelling. Phase 1 prints a version only; command
-parity is a later acceptance gate. Hub serving stays Python, so the Go executable
-must not silently claim to implement `hub serve`. (`src/rookery/cli.py:11`,
+parity is a later acceptance gate. Hub serving and token-hash administration stay
+Python, so the Go executable must not silently claim to implement `hub serve`
+or `hub node` commands. (`src/rookery/cli.py:11`,
 `src/rookery/cli.py:15`, `src/rookery/cli.py:67`,
 `src/rookery/cli.py:83`, `src/rookery/hub_http.py:35`.)
+
+After writing configuration, both helpers MUST return valid JSON containing
+`node`, `url`, `token_sha256` (the lowercase SHA-256 hex of the configured token)
+and `next_steps`. They MUST NOT print the token. The next-steps text is:
+
+> Give this hash to the hub operator; they add it with `rookery hub node add NODE HASH` (or deploy/kubernetes/hub-node.sh for Kubernetes). Then check `rookery health`.
+
+The Python administration CLI is `rookery hub node list --tokens FILE`,
+`rookery hub node add NODE HASH --tokens FILE` and
+`rookery hub node remove NODE --tokens FILE`. It accepts only token hashes,
+refuses duplicate node names, reused hashes, invalid names/hashes and removal
+of the last node, and atomically replaces the JSON in the same directory with
+fsync and rename while preserving owner and mode. The hub's authentication
+response remains HTTP 401 `unauthorized`; only the helper's diagnostic changes.
+The diagnostic MUST flow through daemon error reporting and the stored helper
+health used by `health` and `doctor`. HTTP 401 remains an unknown/retryable
+outcome and MUST NOT discard or re-identify queued requests.
 
 Private hub GET /healthz and /readyz return `{ok:true,protocol:2}` when storage is
 available; GET /metrics is Prometheus text; GET /graph returns bounded metadata

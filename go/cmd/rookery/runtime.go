@@ -4,8 +4,10 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"github.com/llcoolkm/rookery/go/core"
 	"github.com/llcoolkm/rookery/go/helper"
 	"github.com/llcoolkm/rookery/go/platform"
@@ -159,7 +161,7 @@ func runPlatform(ctx context.Context, args []string) (any, error) {
 		if e = writeJSON(ctx, h, root, "config.json", c); e != nil {
 			return nil, errors.New("configuration write failed")
 		}
-		return map[string]any{"node": c.Node, "url": c.URL}, nil
+		return map[string]any{"node": c.Node, "url": c.URL, "token_sha256": fmt.Sprintf("%x", sha256.Sum256([]byte(c.Token))), "next_steps": "Give this hash to the hub operator; they add it with `rookery hub node add NODE HASH` (or deploy/kubernetes/hub-node.sh for Kubernetes). Then check `rookery health`."}, nil
 	}
 	if a.command == "install" {
 		return installCommand(ctx, h, root, a)
@@ -228,6 +230,7 @@ func runPlatform(ctx context.Context, args []string) (any, error) {
 		if e != nil {
 			return nil, e
 		}
+		hub.Node = config.Node
 		busy := config.BusyDelivery
 		if busy == nil {
 			busy = []string{"claude"}

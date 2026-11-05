@@ -74,7 +74,9 @@ they cannot replace a built-in one.
 This example connects two computers, nodes `alpha` and `beta`, through a hub at
 `hub.example.com`. The hub may run on one of the two nodes. Download the wheel
 from [GitHub Releases](https://github.com/llcoolkm/rookery/releases) and verify
-its published SHA256 checksum before installing.
+its published SHA256 checksum before installing. For a new computer joining an
+existing hub, follow [Adding a node](docs/operations.md#adding-a-node): the hub
+operator must register its token hash before the helper can connect.
 
 ### 1. Generate a token on each node
 
@@ -154,8 +156,11 @@ rookery configure --node alpha --url https://hub.example.com \
   --token-file ~/.config/rookery/token
 ```
 
-The URL is the hub's origin, without `/v2`. To try the helper in the foreground,
-run `rookery daemon` and check `rookery doctor` from another shell. For
+`configure` prints the node's `token_sha256` and `next_steps`; give that hash
+to the hub operator for registration as described in
+[Adding a node](docs/operations.md#adding-a-node). Configuration alone does not
+authorise a node. The URL is the hub's origin, without `/v2`. To try the helper
+in the foreground, run `rookery daemon` and check `rookery doctor` from another shell. For
 unattended operation install it as a service, then start it; installation alone
 does not start it:
 

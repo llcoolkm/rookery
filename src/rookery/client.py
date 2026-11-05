@@ -1,5 +1,6 @@
 """Small agent-facing interface: atomic requests and bounded local reads."""
 import json
+import hashlib
 import os
 import sqlite3
 from pathlib import Path
@@ -31,7 +32,10 @@ def configure(path, node, url, token, allow_http=False):
     atomic(path/'config.json',config)
     for name in ('spool','results'):
         (path/name).mkdir(mode=0o700,exist_ok=True)
-    return {'node':node,'url':config['url']}
+    return {'node':node,'url':config['url'],
+            'token_sha256':hashlib.sha256(token.encode()).hexdigest(),
+            'next_steps':"Give this hash to the hub operator; they add it with `rookery hub node add NODE HASH` "
+                         "(or deploy/kubernetes/hub-node.sh for Kubernetes). Then check `rookery health`."}
 
 
 def set_busy_delivery(path, provider, enabled):

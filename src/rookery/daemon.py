@@ -37,6 +37,10 @@ class HubClient:
             response = self.opener.open(req,timeout=35)
         except urllib.error.HTTPError as exc:
             with exc:
+                if exc.code == 401:
+                    raise Error(f"hub does not recognise node {self.config['node']} (HTTP 401): "
+                                "ask the hub operator to add this node's token hash; "
+                                "see docs/operations.md#adding-a-node") from None
                 if exc.code in (400,403,409,413,422):
                     try:
                         error = json.loads(exc.read(65536)).get('error','request rejected')

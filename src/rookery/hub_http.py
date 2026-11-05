@@ -35,6 +35,15 @@ def snapshot_once(hub, directory, keep=3):
 def add_parser(sub):
     parser = sub.add_parser('hub', help='run the unified durable messaging authority')
     commands = parser.add_subparsers(dest='hub_command', required=True)
+    node = commands.add_parser('node', help='manage node token hashes; never raw tokens')
+    actions = node.add_subparsers(dest='node_command', required=True)
+    for name in ('list', 'add', 'remove'):
+        action = actions.add_parser(name)
+        action.add_argument('--tokens', required=True, help='hub token-hash JSON file')
+        if name != 'list':
+            action.add_argument('node')
+        if name == 'add':
+            action.add_argument('hash', help='lowercase SHA-256 hex digest, never the token')
     serve = commands.add_parser('serve')
     serve.add_argument('--db', required=True)
     serve.add_argument('--tokens', required=True)
@@ -122,6 +131,9 @@ async def serve(args):
 
 
 def run(args, ledger=None):
+    if args.hub_command == 'node':
+        from .hub_nodes import manage
+        return manage(args.tokens, args.node_command, getattr(args, 'node', None), getattr(args, 'hash', None))
     if args.hub_command != 'serve':
         raise Error('unknown hub command')
     return asyncio.run(serve(args))

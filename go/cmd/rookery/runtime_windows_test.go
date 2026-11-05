@@ -5,6 +5,9 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -32,7 +35,14 @@ func TestWindowsCLIPrivateOfflineState(t *testing.T) {
 		}
 		return v
 	}
-	run("configure", "--node", "alpha", "--url", "https://hub.example.test", "--token-file", filepath.Join(root, "test-bearer"))
+	configured := run("configure", "--node", "alpha", "--url", "https://hub.example.test", "--token-file", filepath.Join(root, "test-bearer")).(map[string]any)
+	if configured["node"] != "alpha" || configured["token_sha256"] != fmt.Sprintf("%x", sha256.Sum256(bytes.Repeat([]byte{'x'}, 32))) || configured["next_steps"] != "Give this hash to the hub operator; they add it with `rookery hub node add NODE HASH` (or deploy/kubernetes/hub-node.sh for Kubernetes). Then check `rookery health`." {
+		t.Fatal("configure did not explain hub registration", configured)
+	}
+	encoded, err := json.Marshal(configured)
+	if err != nil || bytes.Contains(encoded, bytes.Repeat([]byte{'x'}, 32)) {
+		t.Fatal("configure output disclosed bearer token")
+	}
 	run("register-polling", "codex:00000000-0000-4000-8000-000000000001", "--pid", strconv.Itoa(os.Getpid()))
 	run("health")
 	run("inbox", "--as", "codex:00000000-0000-4000-8000-000000000001", "--peek")

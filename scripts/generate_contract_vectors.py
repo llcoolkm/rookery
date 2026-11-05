@@ -13,11 +13,14 @@ import json
 import io
 from pathlib import Path
 import tempfile
-from unittest.mock import patch
+from unittest.mock import Mock, patch
+import urllib.error
 import uuid
 
 from rookery.client import Client, configure
-from rookery.daemon import render
+from rookery.daemon import HubClient, render
+from rookery.core import Error
+from rookery.common import RemoteError
 from rookery.hub import Hub, Unavailable, create_app
 from rookery.mcp import Server, serve, MAX_LINE, codex_client_resolver
 from rookery.local_store import Store
@@ -54,6 +57,15 @@ async def http_call(app, node, request, *, authenticated=True, path="/v2/rpc"):
 
 def generate_vectors():
     vectors = {"format_version": 1, "hub": [], "delivery": [], "mcp": [], "local": [], "request_ids": [], "mcp_frames": []}
+    # Pin helper diagnostics independently of the hub's unchanged wire error.
+    transport = HubClient({'node': 'alpha', 'url': 'https://hub.example', 'token': 'x' * 32})
+    transport.opener = Mock()
+    transport.opener.open.side_effect = urllib.error.HTTPError('https://hub.example', 401, '', {}, None)
+    try:
+        transport.call('list')
+    except Error as exc:
+        vectors['helper_http'] = [{'node': 'alpha', 'status': 401, 'error': str(exc),
+                                   'retryable': not isinstance(exc, RemoteError)}]
     alpha = "alpha/claude:" + identifier(1)
     beta = "beta/codex:" + identifier(2)
     with tempfile.TemporaryDirectory() as temporary, patch("rookery.hub.time.time", return_value=NOW):

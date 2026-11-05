@@ -53,6 +53,43 @@ class CliTests(unittest.TestCase):
                 self.assertNotIn("Traceback", error)
         self.assertFalse((Path(self.state) / "ledger.jsonl").exists())
 
+    def test_configure_explains_hash_handoff_without_exposing_token(self):
+        import hashlib
+        token = 'synthetic-onboarding-credential-' * 2
+        token_file = Path(self.tmp.name) / 'token'
+        token_file.write_text(token + '\n')
+        result = self.invoke('configure', '--node', 'alpha', '--url', 'https://hub.example',
+                             '--token-file', str(token_file))
+        self.assertEqual(result['node'], 'alpha')
+        self.assertEqual(result['token_sha256'], hashlib.sha256(token.encode()).hexdigest())
+        self.assertEqual(result['next_steps'],
+                         'Give this hash to the hub operator; they add it with `rookery hub node add NODE HASH` '
+                         '(or deploy/kubernetes/hub-node.sh for Kubernetes). Then check `rookery health`.')
+        self.assertNotIn(token, json.dumps(result))
+
+    def test_unauthorized_health_and_doctor_retain_operator_guidance(self):
+        from rookery.client import configure
+        from rookery.daemon import Helper, HubClient
+        from rookery.core import Error
+        from rookery.common import RemoteError
+        import urllib.error
+        configure(self.state, 'alpha', 'https://hub.example', 'x' * 32)
+        helper = Helper(Path(self.state), discover=lambda: ([], {}))
+        client = HubClient(helper.config)
+        client.opener = Mock()
+        client.opener.open.side_effect = urllib.error.HTTPError('https://hub.example', 401, '', {}, None)
+        with self.assertRaises(Error) as caught:
+            client.call('sync')
+        self.assertNotIsInstance(caught.exception, RemoteError)
+        expected = ("hub does not recognise node alpha (HTTP 401): ask the hub operator to add this node's "
+                    'token hash; see docs/operations.md#adding-a-node')
+        self.assertEqual(str(caught.exception), expected)
+        helper.health(expected)
+        for command in ('health', 'doctor'):
+            result = self.invoke(command)
+            self.assertFalse(result['connected'])
+            self.assertEqual(result['error'], expected)
+
     def test_configured_commands_route_through_unified_run(self):
         from rookery.client import configure
         configure(self.state, "server", "https://hub.example", "x" * 40)

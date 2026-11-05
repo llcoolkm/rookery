@@ -21,7 +21,15 @@ type RemoteError struct{ Text string }
 func (e *RemoteError) Error() string { return e.Text }
 func Definite(err error) bool        { var e *RemoteError; return errors.As(err, &e) }
 
+// UnknownNodeError retains requests until the operator registers the token hash.
+type UnknownNodeError struct{ Node string }
+
+func (e *UnknownNodeError) Error() string {
+	return fmt.Sprintf("hub does not recognise node %s (HTTP 401): ask the hub operator to add this node's token hash; see docs/operations.md#adding-a-node", e.Node)
+}
+
 type HTTPHub struct {
+	Node          string
 	origin, token string
 	client        *http.Client
 }
@@ -51,7 +59,7 @@ func NewHTTPHub(origin, token string, loopback bool) (*HTTPHub, error) {
 	if len(token) < 32 || len(token) > 4096 || strings.ContainsAny(token, " \t\r\n") {
 		return nil, errors.New("invalid node or token (minimum 32 non-whitespace characters)")
 	}
-	return &HTTPHub{origin, token, &http.Client{Timeout: 35 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}, nil
+	return &HTTPHub{Node: "NODE", origin: origin, token: token, client: &http.Client{Timeout: 35 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}, nil
 }
 func (h *HTTPHub) Call(ctx context.Context, r RPCRequest) (json.RawMessage, error) {
 	if len(r.Data) == 0 {
@@ -79,6 +87,9 @@ func (h *HTTPHub) Call(ctx context.Context, r RPCRequest) (json.RawMessage, erro
 		return nil, errors.New("hub unavailable; requests remain queued")
 	}
 	defer response.Body.Close()
+	if response.StatusCode == http.StatusUnauthorized {
+		return nil, &UnknownNodeError{Node: h.Node}
+	}
 	definite := response.StatusCode == 400 || response.StatusCode == 403 || response.StatusCode == 409 || response.StatusCode == 413 || response.StatusCode == 422
 	if response.StatusCode != 200 && !definite {
 		return nil, fmt.Errorf("hub HTTP %d; requests remain queued", response.StatusCode)

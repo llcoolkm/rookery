@@ -388,6 +388,21 @@ class HelperTests(unittest.TestCase):
         with self.assertRaisesRegex(Error, 'original request retained'):
             client.call('sync', {'cursor': 1})
 
+    def test_401_keeps_original_request_queued(self):
+        import urllib.error
+        client = Client(self.path)
+        request_id = client.enroll('codex:' + self.session['id'])['request_id']
+        transport = HubClient(self.helper.config)
+        transport.opener = Mock()
+        transport.opener.open.side_effect = urllib.error.HTTPError(
+            'https://hub.example', 401, '', {}, None)
+        self.helper.client = transport
+        with self.assertRaisesRegex(Error, 'hub does not recognise node test'):
+            self.helper.requests()
+        queued = self.helper.store.commands()
+        self.assertEqual([request['id'] for request in queued], [request_id])
+        self.assertFalse((self.path / 'results' / (request_id + '.json')).exists())
+
     def test_maximum_escaped_message_batch_fits_bounded_http_response(self):
         from io import BytesIO
         from rookery.core import MAX_BYTES

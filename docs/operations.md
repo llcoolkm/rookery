@@ -8,6 +8,140 @@ Rookery is experimental and its provider integrations rely on undocumented
 harness internals; see the notice in the README and the
 [threat model](../THREAT_MODEL.md).
 
+## Adding a node
+
+Installing the helper and configuring a token does **not** register a node with
+an existing hub. The node operator creates the token; the hub operator must add
+its SHA-256 hash to the hub's allowlist. Keep the token private and send only
+the node name and hash through your agreed operator channel.
+
+The shell and wheel examples below are for Linux and WSL. For native Windows,
+use the Go helper and follow [Windows installation](go-port.md#windows-installation)
+for private token-file protection and service setup. Its `configure`, `health`
+and HTTP 401 guidance follow the same registration flow; hub administration
+runs on the Python hub host or through the Kubernetes script.
+
+1. On the new node, download the wheel from the
+   [official releases](https://github.com/llcoolkm/rookery/releases), verify it
+   against the release's published SHA256 checksum, then install it:
+
+   ```sh
+   uv tool install --python /usr/bin/python3 ./rookery_agents-0.3.1-py3-none-any.whl
+   ```
+
+   Python must be 3.11 or newer. The same configure and health guidance applies
+   to the Go helper. Hub administration commands below use the Python CLI.
+
+2. Choose an unused node name, such as `alpha`. Replace every `/path/to/...`
+   example with a private local path and use the same state directory for all
+   helper commands and its service. Generate a token without printing it:
+
+   ```sh
+   umask 077
+   mkdir -p /path/to/private-config
+   python3 -c 'import secrets; print(secrets.token_urlsafe(32))' > /path/to/private-config/token
+   rookery --state-dir /path/to/state configure --node alpha \
+     --url https://hub.example --token-file /path/to/private-config/token
+   ```
+
+   `configure` writes the private configuration and prints valid JSON containing
+   `node`, `token_sha256` and `next_steps`. Give the hub operator `alpha` and the
+   64-character lowercase `token_sha256`, **never the token or config.json**.
+   Its guidance is:
+
+   > Give this hash to the hub operator; they add it with `rookery hub node add NODE HASH` (or deploy/kubernetes/hub-node.sh for Kubernetes). Then check `rookery health`.
+
+3. The hub operator adds the supplied hash using one of these methods. Replace
+   `HASH` with that hash; these commands never accept a raw token.
+
+   For a file-based hub, run as the owner of the file passed to
+   `hub serve --tokens`, with write access to its directory:
+
+   ```sh
+   rookery hub node list --tokens /path/to/tokens.json
+   rookery hub node add alpha HASH --tokens /path/to/tokens.json
+   ```
+
+   The Python CLI atomically replaces the token-hash JSON while preserving its
+   owner and mode. It refuses duplicate names, reused hashes and malformed
+   entries. The hub rereads this file on every request; no restart is needed.
+
+   For Kubernetes, run the repository script from a shell with kubectl access:
+
+   ```sh
+   deploy/kubernetes/hub-node.sh list
+   deploy/kubernetes/hub-node.sh add alpha HASH
+   ```
+
+   Defaults are namespace `rookery` and Secret `rookery-hub-tokens`. Override
+   them with `--namespace NAMESPACE --secret SECRET` before the command. The
+   script keeps a private backup and verifies that unrelated entries did not
+   change. The hub rereads the projected file per request, but kubelet Secret
+   propagation can take up to about two minutes. No hub restart is needed.
+
+4. On the node, start the helper in one terminal:
+
+   ```sh
+   rookery --state-dir /path/to/state daemon
+   ```
+
+   In another terminal, check:
+
+   ```sh
+   rookery --state-dir /path/to/state health
+   rookery --state-dir /path/to/state doctor
+   ```
+
+   Wait for `connected: true`. For unattended operation, stop the foreground
+   helper and follow [service installation](#linux-and-wsl-with-systemd), using
+   the same state directory. A configured but unregistered node reports:
+
+   ```text
+   hub does not recognise node alpha (HTTP 401): ask the hub operator to add this node's token hash; see docs/operations.md#adding-a-node
+   ```
+
+   Ask the operator to verify the name/hash and, on Kubernetes, allow propagation
+   time. HTTP 401 retains queued requests and their identities: do not delete
+   state or recreate commands to work around it.
+
+5. Open the Claude and Codex sessions that should receive messages, discover
+   their exact IDs, then enroll them locally:
+
+   ```sh
+   rookery --state-dir /path/to/state list
+   rookery --state-dir /path/to/state enroll alpha/claude:CLAUDE_SESSION_UUID --alias claude
+   rookery --state-dir /path/to/state enroll alpha/codex:CODEX_SESSION_UUID --alias codex
+   ```
+
+   Replace the uppercase UUID placeholders with IDs from discovery. Codex needs
+   the session open on its managed app-server daemon; a historical thread or a
+   session on a private standalone app-server is insufficient. See
+   [Session setup](#session-setup) and [Provider integration](#provider-integration)
+   for MCP installation and delivery requirements.
+
+### Removing a node or rotating its token
+
+Stop the node's helper before revoking access. The hub operator removes it:
+
+```sh
+rookery hub node remove alpha --tokens /path/to/tokens.json
+# Kubernetes alternative:
+deploy/kubernetes/hub-node.sh remove alpha
+```
+
+Both methods refuse to remove the last node. To retire the last node, stop the
+hub instead. Removal revokes authentication; it does not erase message history
+or local state. Kubernetes revocation takes effect after Secret propagation.
+
+To rotate a token, keep the same node name, hub URL and state directory. Stop
+the helper, generate a fresh token with `umask 077`, and run `configure` again
+with its token file. Give the new hash to the operator. The operator removes
+the old entry and adds the same node name with the new hash, using the commands
+above; another registered node must remain during removal. Restart the helper
+and check `health` after the change has propagated. Existing queued requests
+retain their identities, including requests whose outcome was uncertain during
+rotation. Never reuse another node's token or hash.
+
 ## The helper
 
 Run one helper per participating Unix account, on the computer where that
@@ -37,7 +171,8 @@ export PATH="$HOME/.local/share/rookery/venv/bin:$PATH"
 
 ### Configuring
 
-Generate the node token as described in [Tokens](#tokens), then:
+For a new computer, follow [Adding a node](#adding-a-node), including the hub
+operator registration step. Once its token exists, configure the helper:
 
 ```sh
 rookery configure --node alpha --url https://hub.example.com \

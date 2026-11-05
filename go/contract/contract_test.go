@@ -21,7 +21,13 @@ import (
 
 type vectors struct {
 	FormatVersion int `json:"format_version"`
-	Hub           []struct {
+	HelperHTTP    []struct {
+		Node      string
+		Status    int
+		Error     string
+		Retryable bool
+	} `json:"helper_http"`
+	Hub []struct {
 		Name     string
 		Request  core.RPCRequest
 		Response core.RPCResponse
@@ -54,6 +60,24 @@ type vectors struct {
 		ID      string
 		Created *float64
 	} `json:"request_ids"`
+}
+
+func TestHelperHTTPDiagnostics(t *testing.T) {
+	for _, c := range load(t).HelperHTTP {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(c.Status)
+		}))
+		hub, err := core.NewHTTPHub(server.URL, strings.Repeat("x", 32), true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		hub.Node = c.Node
+		_, err = hub.Call(context.Background(), core.RPCRequest{Op: "list"})
+		server.Close()
+		if err == nil || err.Error() != c.Error || (!core.Definite(err)) != c.Retryable {
+			t.Fatalf("helper diagnostic mismatch: %v", err)
+		}
+	}
 }
 
 func load(t *testing.T) vectors {
