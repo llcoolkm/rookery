@@ -287,14 +287,20 @@ func (f *files) List(ctx context.Context, root string) ([]platform.Entry, error)
 	}
 	out := make([]platform.Entry, 0, len(entries))
 	for _, v := range entries {
-		info, e := v.Info()
+		child, e := syscall.Openat(fd, v.Name(), 0x200000|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
 		if e != nil {
 			return nil, errUnsafe
 		}
-		if info.Mode()&os.ModeSymlink != 0 {
+		var st syscall.Stat_t
+		e = syscall.Fstat(child, &st)
+		syscall.Close(child)
+		if e != nil {
+			return nil, errUnsafe
+		}
+		if st.Mode&syscall.S_IFMT == syscall.S_IFLNK {
 			continue
 		}
-		out = append(out, platform.Entry{Name: v.Name(), Size: info.Size(), Directory: v.IsDir()})
+		out = append(out, platform.Entry{Name: v.Name(), Size: st.Size, Directory: st.Mode&syscall.S_IFMT == syscall.S_IFDIR})
 	}
 	return out, nil
 }

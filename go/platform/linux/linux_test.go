@@ -332,3 +332,16 @@ func TestWSLPlanPreservesStartup(t *testing.T) {
 		t.Fatal("old helper command not replaced")
 	}
 }
+
+func TestListDescriptorRelativeMetadata(t *testing.T) {
+	host, root := testHost(t)
+	ctx := context.Background()
+	if e := host.Files.AtomicWrite(ctx, root, "entry", []byte("body")); e != nil {
+		t.Fatal(e)
+	}
+	os.Symlink("entry", filepath.Join(root, "link"))
+	entries, e := host.Files.List(ctx, root)
+	if e != nil || len(entries) != 1 || entries[0].Name != "entry" || entries[0].Size != 4 {
+		t.Fatal("descriptor relative listing failed", e)
+	}
+}
