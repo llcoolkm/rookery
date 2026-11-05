@@ -39,14 +39,16 @@ func TestDiscoveryFailureLogRedactsResolverAndDialErrors(t *testing.T) {
 	log.SetPrefix("")
 	privateError := "synthetic private path/session/token\nforged"
 	for _, stage := range []string{"resolve", "dial"} {
-		for _, unsafe := range []bool{false, true} {
+		for _, refusal := range []struct {
+			err    error
+			reason string
+		}{
+			{errors.New(privateError), "discovery_unavailable"},
+			{fmt.Errorf("%s: %w", privateError, platform.ErrControlEndpointUnsafe), "control_endpoint_unsafe"},
+			{fmt.Errorf("%s: %w", privateError, platform.ErrControlEndpointElevated), "control_endpoint_elevated"},
+		} {
 			output.Reset()
-			err := errors.New(privateError)
-			wantReason := "discovery_unavailable"
-			if unsafe {
-				err = fmt.Errorf("%s: %w", privateError, platform.ErrControlEndpointUnsafe)
-				wantReason = "control_endpoint_unsafe"
-			}
+			err, wantReason := refusal.err, refusal.reason
 			host := platform.Host{Paths: refusedControl{err: err}}
 			options := Options{}
 			if stage == "dial" {

@@ -587,12 +587,17 @@ SYSTEM grant. Existing unsafe ACLs are refused, never silently repaired. Native
 Scheduled Tasks grant current SID plus SYSTEM. System ancestry trusts SYSTEM,
 Administrators and TrustedInstaller; the volume root is a pinned trust anchor.
 All other ancestors are checked for unauthorized mutation grants and reparse
-points while open without delete sharing during validation. Provider-record
-ancestry guards are released after opening; record handles allow delete sharing
-and endpoint resolution reopens the path and verifies the volume/file identity.
-Files also refuse hardlinks, alternate
+points while open without delete sharing during validation. Provider records
+are copied into read-only memory (at most 1 MiB, matching the provider parser
+limit). Record handles deny write/delete sharing during the
+copy; every record and ancestry handle closes before the snapshot is returned.
+An existing write/delete-capable record handle causes acquisition to fail closed.
+Endpoint resolution reopens and revalidates the path, comparing volume serial,
+file ID and complete bytes with the host-issued snapshot. The next provider
+record open captures a fresh snapshot. Files also refuse hardlinks, alternate
 data streams, UNC/device paths, DOS device names and trailing-dot/space aliases.
-Provider records stay host-issued and open through endpoint resolution.
+Snapshot capabilities remain valid only until Close; private state and lock
+files retain their native handles and ancestry guards.
 
 Writes create a private same-directory temporary file, flush contents, close it,
 then use `MoveFileEx(REPLACE_EXISTING | WRITE_THROUGH)`; exclusive backups omit
@@ -828,3 +833,39 @@ ownership validation, use the per-boot counter, permit provider record rotation
 with identity revalidation, and test elevation policy independently of socket
 ownership. Native Windows execution, actual Task Scheduler descriptors, Claude
 pipe DACL compatibility and the reboot comparison above remain acceptance gates.
+
+
+### Phase 3c native CI corrections
+
+The first elevated `windows-latest` run at `12f72b0` reported two failing tests:
+provider-directory rename with an open record, and an assumed socket-owner
+refusal. Provider snapshots now close all native handles immediately after
+verification and copying. Regression tests exercise ancestry moves, junction
+substitution, atomic rotation, in-place edits, capability lifetime and size bounds.
+
+TOCTOU protection holds during each guarded open/copy. Endpoint provenance
+reopens the original name, repeats owner/ACL/no-reparse/hardlink checks and
+compares volume serial, file ID and bytes. Between verifications there is no
+continuous object pin: an object can disappear or move and return undetected;
+file-ID reuse with identical contents can also pass. A snapshot is historical,
+not a promise that the path stays unchanged after verification. Changed bytes,
+different identities, missing names and unsafe ancestry fail the next provenance
+check. The in-memory bytes remain stable throughout parsing.
+
+Elevated socket tests now require successful endpoint resolution followed by
+`control_endpoint_elevated` from Dial and redacted discovery. That fixed reason
+is preserved only when a successful token query proves elevation; owner and
+other authentication failures retain their existing refusals. Tests make no
+claim that elevation determines socket ownership. The Windows test audit also
+removed the corresponding ownership assumption from the token-policy comment.
+No authentication policy was relaxed. Native Windows execution of these fixes
+and unelevated protocol acceptance remain outstanding.
+
+Local phase 3c gates passed: 322 Python tests; Linux Go vet, full tests and
+race tests; Windows cross-vet and test compilation for all 11 target packages;
+Linux/Windows cgo-disabled builds; both portable OS-import gates; and whitespace
+and added-line privacy checks. Windows escape analysis still places transfer
+and accept OVERLAPPED allocations, byte counts and flags on the heap. Build
+caches were isolated and cleared between target groups to fit the writable
+storage quota. No real state, tokens or live hub were used. These compile gates
+do not establish native Windows runtime acceptance.

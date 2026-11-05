@@ -93,7 +93,10 @@ func (p *Process) inspect(ctx context.Context, pid int, security bool, checks ..
 	}
 	defer token.Close()
 	for _, check := range checks {
-		if check(token) != nil {
+		if err := check(token); err != nil {
+			if errors.Is(err, platform.ErrControlEndpointElevated) {
+				return platform.ProcessRef{}, 0, false, platform.ErrControlEndpointElevated
+			}
 			return platform.ProcessRef{}, 0, false, errProcess
 		}
 	}

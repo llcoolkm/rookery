@@ -137,11 +137,21 @@ func TestProviderRecordRotationAndAncestryRename(t *testing.T) {
 		t.Fatal(e)
 	}
 	defer v.Close()
+	if v.(*verifiedFile).File != nil || len(v.(*verifiedFile).guards) != 0 {
+		t.Fatal("provider snapshot retained native handles")
+	}
 	if e = os.Rename(root, root+"-moved"); e != nil {
-		t.Fatal("open record blocked ancestry rename", e)
+		t.Fatal("snapshot retained handles blocking ancestry rename", e)
 	}
 	if recordProvenance(v.(*verifiedFile)) == nil {
 		t.Fatal("record at missing original ancestry admitted")
+	}
+	createJunction(t, f, root, root+"-moved")
+	if recordProvenance(v.(*verifiedFile)) == nil {
+		t.Fatal("same record through substituted ancestry admitted")
+	}
+	if e = os.Remove(root); e != nil {
+		t.Fatal(e)
 	}
 	if e = os.Rename(root+"-moved", root); e != nil {
 		t.Fatal(e)
@@ -150,14 +160,75 @@ func TestProviderRecordRotationAndAncestryRename(t *testing.T) {
 		t.Fatal("restored original identity refused")
 	}
 	if e = f.AtomicWrite(ctx, root, "record.json", []byte("new")); e != nil {
-		t.Fatal("open provider record blocked atomic rotation", e)
+		t.Fatal("snapshot retained handles blocking atomic rotation", e)
 	}
 	if recordProvenance(v.(*verifiedFile)) == nil {
 		t.Fatal("replaced record identity admitted")
 	}
 	got, e := io.ReadAll(v)
 	if e != nil || string(got) != "old" {
-		t.Fatal("open handle did not retain original record", e)
+		t.Fatal("snapshot did not retain original record", e)
+	}
+	fresh, e := f.OpenProviderRecord(ctx, root, "record.json")
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer fresh.Close()
+	if recordProvenance(fresh.(*verifiedFile)) != nil {
+		t.Fatal("new verified snapshot refused")
+	}
+	got, e = io.ReadAll(fresh)
+	if e != nil || string(got) != "new" {
+		t.Fatal("next read did not capture rotated record", e)
+	}
+	if e = f.AtomicWrite(ctx, root, "record.json", []byte("new")); e != nil {
+		t.Fatal(e)
+	}
+	if recordProvenance(fresh.(*verifiedFile)) == nil {
+		t.Fatal("different file identity with identical bytes admitted")
+	}
+}
+
+func TestProviderSnapshotRevalidationAndLimits(t *testing.T) {
+	f, root := testFiles(t)
+	ctx := context.Background()
+	if e := f.AtomicWrite(ctx, root, "record.json", []byte("old")); e != nil {
+		t.Fatal(e)
+	}
+	v, e := f.OpenProviderRecord(ctx, root, "record.json")
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer v.Close()
+	if _, e := v.Write([]byte("changed")); e == nil {
+		t.Fatal("snapshot write admitted")
+	}
+	if e := v.Sync(); e == nil {
+		t.Fatal("snapshot sync claimed durable storage")
+	}
+	if e := os.WriteFile(filepath.Join(root, "record.json"), []byte("new"), 0600); e != nil {
+		t.Fatal("snapshot blocked in-place edit", e)
+	}
+	if recordProvenance(v.(*verifiedFile)) == nil {
+		t.Fatal("in-place changed record admitted")
+	}
+	if e := f.AtomicWrite(ctx, root, "large.json", bytes.Repeat([]byte("x"), 1<<20)); e != nil {
+		t.Fatal(e)
+	}
+	large, e := f.OpenProviderRecord(ctx, root, "large.json")
+	if e != nil {
+		t.Fatal("maximum-size record refused", e)
+	}
+	large.Close()
+	if e := os.WriteFile(filepath.Join(root, "large.json"), bytes.Repeat([]byte("x"), (1<<20)+1), 0600); e != nil {
+		t.Fatal(e)
+	}
+	if large, e = f.OpenProviderRecord(ctx, root, "large.json"); e == nil {
+		large.Close()
+		t.Fatal("oversized record admitted")
+	}
+	if e := os.Rename(root, root+"-moved"); e != nil {
+		t.Fatal("snapshot failure retained handles", e)
 	}
 }
 func TestRemoveVerifiedHandle(t *testing.T) {

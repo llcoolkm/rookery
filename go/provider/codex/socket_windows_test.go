@@ -7,7 +7,6 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
-	"fmt"
 	win "golang.org/x/sys/windows"
 	"io"
 	"net"
@@ -130,22 +129,28 @@ func TestControlSocket(t *testing.T) {
 			elevated := token.IsElevated()
 			token.Close()
 			if elevated {
-				// Elevated Windows creates this socket with the Administrators
-				// owner. This fixture therefore exercises ownership refusal;
-				// token elevation policy is tested directly in platform/windows.
+				// Ownership verification succeeds on this fixture. The token check
+				// at Dial must refuse either elevated endpoint before protocol I/O.
 				resolver := host.Paths.(interface {
 					ControlEndpoint(context.Context, string) (platform.Endpoint, error)
 				})
-				_, err = resolver.ControlEndpoint(ctx, "codex")
-				want := fmt.Sprintf("control socket owner mismatch: %s", platform.ErrControlEndpointUnsafe)
-				if !errors.Is(err, platform.ErrControlEndpointUnsafe) || err.Error() != want {
-					t.Fatal("expected socket ownership refusal", err)
+				ep, err := resolver.ControlEndpoint(ctx, "codex")
+				if err != nil || ep == "" {
+					t.Fatal("control_endpoint_resolution_failed")
+				}
+				conn, err := host.IPC.Dial(ctx, ep)
+				if conn != nil {
+					conn.Close()
+					t.Fatal("elevated_connection_admitted")
+				}
+				if !errors.Is(err, platform.ErrControlEndpointElevated) || err.Error() != platform.ErrControlEndpointElevated.Error() {
+					t.Fatal("expected control_endpoint_elevated at Dial")
 				}
 				adapter, _ := New(provider.Config{}, host)
-				_, err = adapter.Discover(ctx)
+				rows, err := adapter.Discover(ctx)
 				var failure *discoveryError
-				if !errors.As(err, &failure) || failure.reason != "control_endpoint_unsafe" {
-					t.Fatal("expected redacted endpoint refusal", err)
+				if rows != nil || !errors.As(err, &failure) || failure.reason != "control_endpoint_elevated" || err.Error() != errDiscovery.Error() {
+					t.Fatal("expected redacted control_endpoint_elevated at Discover")
 				}
 				return
 			}

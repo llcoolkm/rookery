@@ -3,10 +3,12 @@
 package windows
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -29,21 +31,66 @@ type files struct {
 }
 
 type verifiedFile struct {
-	*os.File
+	File           *os.File
 	host           *files
 	root, relative string
 	guards         []win.Handle
+	snapshot       *bytes.Reader
+	data           []byte
+	identity       win.ByHandleFileInformation
 }
 
 func (v *verifiedFile) Close() error {
 	v.host.mu.Lock()
 	delete(v.host.opened, v)
 	v.host.mu.Unlock()
+	if v.snapshot != nil {
+		return nil
+	}
 	err := v.File.Close()
 	closeGuards(v.guards)
 	v.guards = nil
 	return err
 }
+
+// Provider snapshots expose no writable storage or retained native handles.
+func (v *verifiedFile) Fd() uintptr { return v.File.Fd() }
+
+func (v *verifiedFile) Read(p []byte) (int, error) {
+	if v.snapshot == nil {
+		return v.File.Read(p)
+	}
+	v.host.mu.Lock()
+	defer v.host.mu.Unlock()
+	if !v.host.opened[v] {
+		return 0, os.ErrClosed
+	}
+	return v.snapshot.Read(p)
+}
+func (v *verifiedFile) Seek(offset int64, whence int) (int64, error) {
+	if v.snapshot == nil {
+		return v.File.Seek(offset, whence)
+	}
+	v.host.mu.Lock()
+	defer v.host.mu.Unlock()
+	if !v.host.opened[v] {
+		return 0, os.ErrClosed
+	}
+	return v.snapshot.Seek(offset, whence)
+}
+func (v *verifiedFile) Write(p []byte) (int, error) {
+	if v.snapshot != nil {
+		return 0, errUnsafe
+	}
+	return v.File.Write(p)
+}
+func (v *verifiedFile) Sync() error {
+	if v.snapshot != nil {
+		return errUnsafe
+	}
+	return v.File.Sync()
+}
+
 func newFiles() (*files, error) {
 	user, err := win.GetCurrentProcessToken().GetTokenUser()
 	if err != nil {
@@ -192,7 +239,7 @@ func (f *files) validateHandle(h win.Handle, private, directory bool) error {
 // guardPath holds every component open without FILE_SHARE_DELETE. Replacement,
 // rename and reparse substitution of any traversed component therefore fail
 // until the operation ends. Private files retain guards for their lifetime;
-// provider records release them after open and recheck identity at provenance.
+// provider records release all handles after copying and recheck at provenance.
 func (f *files) guardPath(path string, private, create bool) ([]win.Handle, error) {
 	if !validPath(path) {
 		return nil, errUnsafe
@@ -275,6 +322,9 @@ func (f *files) EnsurePrivate(ctx context.Context, path string, directory bool) 
 func (f *files) OpenNoFollow(ctx context.Context, root, name string, create bool) (platform.File, error) {
 	return f.open(ctx, root, name, create, true)
 }
+
+// OpenProviderRecord returns a read-only snapshot with no retained native
+// handles. Endpoint provenance reopens and validates identity and contents.
 func (f *files) OpenProviderRecord(ctx context.Context, root, name string) (platform.File, error) {
 	return f.open(ctx, root, name, false, false)
 }
@@ -306,7 +356,7 @@ func (f *files) open(ctx context.Context, root, name string, create, private boo
 	}
 	sharing := uint32(win.FILE_SHARE_READ | win.FILE_SHARE_WRITE)
 	if !private {
-		sharing |= win.FILE_SHARE_DELETE
+		sharing = win.FILE_SHARE_READ
 	}
 	h, e := win.CreateFile(ptr, access, sharing, sa, disposition, win.FILE_FLAG_OPEN_REPARSE_POINT, 0)
 	if e != nil {
@@ -321,14 +371,23 @@ func (f *files) open(ctx context.Context, root, name string, create, private boo
 		closeGuards(g)
 		return nil, errUnsafe
 	}
-	if !private {
-		// A provider may rotate records or rename their directories while a
-		// reader holds this handle. Traversal was protected through open;
-		// recordProvenance reopens the name and compares its file identity.
-		closeGuards(g)
-		g = nil
-	}
 	v := &verifiedFile{File: os.NewFile(uintptr(h), name), host: f, root: root, relative: name, guards: g}
+	if !private {
+		// Keep the record and ancestry protected only while validating/copying.
+		// NTFS directory moves require closing even share-delete record handles.
+		// The provider parser also limits records to 1 MiB; reject larger files
+		// rather than retaining a handle or allocating unbounded memory here.
+		identityErr := win.GetFileInformationByHandle(h, &v.identity)
+		data, readErr := io.ReadAll(io.LimitReader(v.File, (1<<20)+1))
+		validationErr := f.validateHandle(h, false, false)
+		closeErr := v.File.Close()
+		closeGuards(g)
+		if identityErr != nil || readErr != nil || validationErr != nil || closeErr != nil || len(data) > 1<<20 {
+			return nil, errUnsafe
+		}
+		v.File, v.guards = nil, nil
+		v.data, v.snapshot = data, bytes.NewReader(data)
+	}
 	f.mu.Lock()
 	f.opened[v] = true
 	f.mu.Unlock()
@@ -512,16 +571,23 @@ func recordProvenance(v *verifiedFile) error {
 	if !live {
 		return errUnsafe
 	}
-	if v.host.validateHandle(win.Handle(v.Fd()), false, false) != nil {
-		return errUnsafe
-	}
 	current, e := v.host.open(context.Background(), v.root, v.relative, false, false)
 	if e != nil {
 		return errUnsafe
 	}
 	defer current.Close()
-	var a, b win.ByHandleFileInformation
-	if win.GetFileInformationByHandle(win.Handle(v.Fd()), &a) != nil || win.GetFileInformationByHandle(win.Handle(current.(*verifiedFile).Fd()), &b) != nil || a.VolumeSerialNumber != b.VolumeSerialNumber || a.FileIndexHigh != b.FileIndexHigh || a.FileIndexLow != b.FileIndexLow {
+	fresh := current.(*verifiedFile)
+	a := v.identity
+	if v.snapshot == nil {
+		if v.host.validateHandle(win.Handle(v.Fd()), false, false) != nil || win.GetFileInformationByHandle(win.Handle(v.Fd()), &a) != nil {
+			return errUnsafe
+		}
+	} else if !bytes.Equal(v.data, fresh.data) {
+		// Identity alone cannot detect in-place edits to a closed record.
+		return errUnsafe
+	}
+	b := fresh.identity
+	if a.VolumeSerialNumber != b.VolumeSerialNumber || a.FileIndexHigh != b.FileIndexHigh || a.FileIndexLow != b.FileIndexLow {
 		return errUnsafe
 	}
 	return nil

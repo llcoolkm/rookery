@@ -230,8 +230,11 @@ func tokenAllowed(peer, current win.Token, nonElevated bool) error {
 	if nonElevated {
 		for _, t := range []win.Token{peer, current} {
 			v, e := tokenDWORD(t, win.TokenElevation)
-			if e != nil || v != 0 {
+			if e != nil {
 				return errPeer
+			}
+			if v != 0 {
+				return platform.ErrControlEndpointElevated
 			}
 		}
 	}
@@ -266,7 +269,13 @@ func (i *ipc) authenticate(ctx context.Context, h win.Handle, socket, server boo
 		return nil, errPeer
 	}
 	ref, e := process.authenticateProcess(ctx, int(pid), ct, socket)
-	if e != nil || (expected != nil && ref != *expected) {
+	if e != nil {
+		if errors.Is(e, platform.ErrControlEndpointElevated) {
+			return nil, platform.ErrControlEndpointElevated
+		}
+		return nil, errPeer
+	}
+	if expected != nil && ref != *expected {
 		return nil, errPeer
 	}
 	c := &connection{handle: h, socket: socket, peer: ref, process: i.paths.process}

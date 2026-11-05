@@ -25,6 +25,9 @@ func (e *discoveryError) Error() string { return errDiscovery.Error() }
 func (e *discoveryError) Unwrap() error { return errDiscovery }
 
 func controlDiscoveryError(err error) error {
+	if errors.Is(err, platform.ErrControlEndpointElevated) {
+		return &discoveryError{reason: "control_endpoint_elevated"}
+	}
 	if errors.Is(err, platform.ErrControlEndpointUnsafe) {
 		return &discoveryError{reason: "control_endpoint_unsafe"}
 	}
@@ -34,7 +37,7 @@ func controlDiscoveryError(err error) error {
 func logDiscovery(err error) {
 	reason := "discovery_unavailable"
 	var failure *discoveryError
-	if errors.As(err, &failure) && failure.reason == "control_endpoint_unsafe" {
+	if errors.As(err, &failure) && (failure.reason == "control_endpoint_unsafe" || failure.reason == "control_endpoint_elevated") {
 		reason = failure.reason
 	}
 	log.Printf("provider discovery failed provider=codex reason=%s", reason)

@@ -7,6 +7,7 @@ package platform
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"time"
 )
@@ -14,6 +15,10 @@ import (
 // ErrControlEndpointUnsafe reports a refused control endpoint without exposing
 // its address, ownership, or process details to portable provider code.
 var ErrControlEndpointUnsafe = errors.New("unsafe control endpoint")
+
+// ErrControlEndpointElevated identifies the fixed, redacted elevation refusal
+// within ErrControlEndpointUnsafe. It contains no principal or process details.
+var ErrControlEndpointElevated = fmt.Errorf("control_endpoint_elevated: %w", ErrControlEndpointUnsafe)
 
 // Connection carries OS credentials captured and pinned before Accept/Dial return.
 // Peer returns that original ProcessRef, never a fresh lookup of a reused PID.
@@ -174,8 +179,9 @@ type Paths interface {
 	StateDir() (string, error)
 	Endpoint(string) (Endpoint, error)
 	// HarnessEndpoint imports an address parsed by trusted provider code from
-	// record, a still-open Files.OpenNoFollow handle under ProviderData(provider).
-	// Verify that this host issued the record handle, its provider-root provenance,
+	// record, a live host-issued file capability under ProviderData(provider).
+	// Windows provider records are memory snapshots, revalidated by reopening.
+	// Verify that this host issued the record capability, its provider-root provenance,
 	// owner and no-follow ancestry; reject arbitrary/unverified handles. Provider
 	// code must derive address and expected server from that same verified record,
 	// never tool/peer payloads. Harness-specific record parsing stays in provider.

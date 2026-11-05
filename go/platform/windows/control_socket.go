@@ -4,6 +4,7 @@ package windows
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"github.com/llcoolkm/rookery/go/platform"
 	win "golang.org/x/sys/windows"
@@ -133,6 +134,9 @@ func (i *ipc) dialControl(ctx context.Context, e endpoint) (platform.Connection,
 	out, err := i.authenticate(ctx, h, true, true, e.expected)
 	if err != nil {
 		win.Closesocket(h)
+		if errors.Is(err, platform.ErrControlEndpointElevated) {
+			return nil, platform.ErrControlEndpointElevated
+		}
 		return nil, platform.ErrControlEndpointUnsafe
 	}
 	second, after, checkErr := openAFUnixSocket(e.path, i.paths.files.sid)

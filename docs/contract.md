@@ -682,7 +682,15 @@ TrustedInstaller mutation rights. The volume root is a pinned trust anchor;
 ordinary Windows volume roots permit users to create folders. This exception
 never applies to descendants or to state objects. Ancestor handles deny delete
 sharing throughout each operation. Local files reject hardlinks as well as
-reparse points. Scheduled Task security grants current SID and SYSTEM only.
+reparse points. Windows provider records instead return a read-only bounded
+memory snapshot and close every native handle before returning. Provenance
+reopens with guarded ancestry and compares volume serial, file ID and complete
+contents; each OpenProviderRecord call verifies and captures a fresh snapshot.
+There is no continuous
+object pin between verifications: disappearance/restoration or file-ID reuse
+with identical bytes is not detected. Changed bytes or identity and unsafe
+ancestry MUST be refused at the next provenance check. Scheduled Task security
+grants current SID and SYSTEM only.
 
 The boot identity is `BootIdentifier` from the kernel's
 `SystemBootEnvironmentInformation`, not rounded uptime or wall time. The native
