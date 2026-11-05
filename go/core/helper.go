@@ -54,6 +54,8 @@ func (h *Helper) Bootstrap(ctx context.Context) error {
 	if e != nil {
 		return e
 	}
+	var highWater *int64
+	var previousAfter int64
 	for {
 		var r struct {
 			Messages []Message
@@ -63,6 +65,15 @@ func (h *Helper) Bootstrap(ctx context.Context) error {
 		if e = RPC(ctx, h.Hub, "bootstrap", data, &r); e != nil {
 			return e
 		}
+		if highWater == nil {
+			value := r.Cursor
+			highWater = &value
+		} else if r.Cursor != *highWater {
+			return errors.New("invalid hub bootstrap cursor")
+		}
+		if r.Next != nil && *r.Next <= previousAfter {
+			return errors.New("invalid hub bootstrap pagination")
+		}
 		events := []Event{}
 		for _, m := range r.Messages {
 			b, _ := json.Marshal(m)
@@ -70,7 +81,7 @@ func (h *Helper) Bootstrap(ctx context.Context) error {
 		}
 		cursor := old
 		if r.Next == nil {
-			cursor = r.Cursor
+			cursor = *highWater
 		}
 		if e = h.Store.Apply(ctx, events, cursor); e != nil {
 			return e
@@ -79,7 +90,8 @@ func (h *Helper) Bootstrap(ctx context.Context) error {
 			return nil
 		}
 		data["after"] = *r.Next
-		data["cursor"] = r.Cursor
+		data["cursor"] = *highWater
+		previousAfter = *r.Next
 	}
 }
 func (h *Helper) Requests(ctx context.Context) error {
@@ -155,13 +167,20 @@ func (h *Helper) Deliver(ctx context.Context) error {
 	if e != nil {
 		return e
 	}
-	reads, e := h.Store.PendingReads(ctx)
-	if e != nil {
-		return e
-	}
 	for _, m := range messages {
 		if m.Status != Pending || m.Expires <= seconds() || !strings.HasPrefix(m.Recipient, h.Node+"/") {
 			continue
+		}
+		eligible, e := h.Store.DeliveryEligible(ctx, m.ID)
+		if e != nil {
+			return e
+		}
+		if !eligible {
+			continue
+		}
+		reads, e := h.Store.PendingReads(ctx)
+		if e != nil {
+			return e
 		}
 		skip := false
 		for _, id := range reads[m.Recipient] {
@@ -206,7 +225,10 @@ func (h *Helper) Deliver(ctx context.Context) error {
 			return e
 		}
 		result := DeliveryResult{Status: "held"}
-		fresh, _ := h.Native.Discover(ctx)
+		fresh := []Session{}
+		if h.Native.Discover != nil {
+			fresh, _ = h.Native.Discover(ctx)
+		}
 		var live *Session
 		for i := range fresh {
 			s := &fresh[i]
@@ -215,7 +237,19 @@ func (h *Helper) Deliver(ctx context.Context) error {
 				break
 			}
 		}
-		if live != nil && live.PID == target.PID && live.PID == d.Session.PID && h.Native.Ready(*live) && d.Message.Expires > seconds() && h.Native.Submit != nil {
+		latestReads, e := h.Store.PendingReads(ctx)
+		if e != nil {
+			return e
+		}
+		pendingRead := false
+		for _, id := range latestReads[m.Recipient] {
+			if id == m.ID {
+				pendingRead = true
+			}
+		}
+		exactClaim := d.Message.ID == m.ID && d.Message.Recipient == m.Recipient && d.Session.ID == target.ID && d.Session.Provider == target.Provider
+		pinnedSame := live != nil && target.ProcessRef != nil && live.ProcessRef != nil && *target.ProcessRef == *live.ProcessRef
+		if !pendingRead && exactClaim && pinnedSame && live.PID == target.PID && live.PID == d.Session.PID && h.Native.Ready(*live) && d.Message.Expires > seconds() && h.Native.Submit != nil {
 			result, e = h.Native.Submit(ctx, *live, d.Message)
 			if e != nil {
 				result = DeliveryResult{Status: "uncertain"}

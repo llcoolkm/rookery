@@ -326,3 +326,20 @@ func (s *LocalStore) Prune(ctx context.Context, now time.Time) error {
 func seconds() float64 { return float64(time.Now().UnixNano()) / 1e9 }
 
 var _ Store = (*LocalStore)(nil)
+
+// DeliveryEligible excludes every unfinished or non-held local native attempt
+// before another remote claim. An uncertain outcome can never gain a new claim
+// merely because a stale local snapshot still says pending.
+func (s *LocalStore) DeliveryEligible(ctx context.Context, id string) (eligible bool, err error) {
+	eligible = true
+	err = s.transaction(ctx, false, func(st *localState) error {
+		for _, attempt := range st.Attempts {
+			if attempt.MessageID == id && (!attempt.Finished || attempt.Result.Status != "held") {
+				eligible = false
+				break
+			}
+		}
+		return nil
+	})
+	return
+}
