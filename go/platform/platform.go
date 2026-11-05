@@ -141,8 +141,9 @@ type ServiceSpec struct {
 	StateDir   string
 }
 type ServiceStatus struct {
-	Installed, Running bool
-	Detail             string
+	Installed bool   `json:"installed"`
+	Running   bool   `json:"running"`
+	Detail    string `json:"detail"`
 }
 
 // Service manages a per-user systemd unit or Windows Scheduled Task.

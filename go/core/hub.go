@@ -31,7 +31,7 @@ func ValidateOrigin(origin string, loopback bool) (string, error) {
 	if e != nil {
 		return "", errors.New("hub URL must be an origin without credentials, path, query or fragment")
 	}
-	if u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || strings.Contains(origin, "#") || (u.Path != "" && u.Path != "/") {
+	if u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || strings.Contains(origin, "#") || (u.EscapedPath() != "" && u.EscapedPath() != "/") {
 		return "", errors.New("hub URL must be an origin without credentials, path, query or fragment")
 	}
 	if u.Hostname() == "" {
@@ -89,6 +89,9 @@ func (h *HTTPHub) Call(ctx context.Context, r RPCRequest) (json.RawMessage, erro
 	}
 	raw, e := io.ReadAll(io.LimitReader(response.Body, bound+1))
 	if e != nil {
+		if definite {
+			return nil, &RemoteError{"request rejected"}
+		}
 		return nil, errors.New("hub response interrupted; original request retained")
 	}
 	if definite {

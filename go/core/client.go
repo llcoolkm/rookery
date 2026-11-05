@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"regexp"
@@ -19,11 +20,16 @@ func CanonicalID(id string) error {
 	if uuidPattern.MatchString(id) {
 		return nil
 	}
-	if uuidPattern.MatchString(strings.ToLower(id)) {
-		return errors.New("ID must be a canonical UUID")
+	raw := strings.ReplaceAll(strings.ReplaceAll(id, "urn:", ""), "uuid:", "")
+	raw = strings.ReplaceAll(strings.Trim(raw, "{}"), "-", "")
+	if len(raw) == 32 {
+		if _, err := hex.DecodeString(raw); err == nil {
+			return errors.New("ID must be a canonical UUID")
+		}
 	}
 	return errors.New("ID must be a UUID")
 }
+
 func Qualify(actor, node string) (string, error) {
 	if actor == "" {
 		return "", errors.New("session binding required: --as or ROOKERY_SESSION")
@@ -84,7 +90,7 @@ func (c *Client) Request(ctx context.Context, op string, input map[string]any, t
 	}
 	if op == "send" || op == "reply" {
 		body, ok := data["body"].(string)
-		if !ok || strings.TrimSpace(body) == "" || len(body) > MaxBodyBytes {
+		if !ok || !utf8.ValidString(body) || strings.TrimSpace(body) == "" || len(body) > MaxBodyBytes {
 			return nil, errors.New("body must contain text and be at most 16384 UTF-8 bytes")
 		}
 		ttl, ok := data["ttl"].(int)
@@ -170,6 +176,21 @@ func (c *Client) Invoke(ctx context.Context, op string, args map[string]any) (an
 	}
 	switch op {
 	case "send", "reply":
+		if raw, ok := args["ttl"]; ok {
+			valid := false
+			switch v := raw.(type) {
+			case int:
+				valid = true
+			case json.Number:
+				_, e := v.Int64()
+				valid = e == nil
+			case float64:
+				valid = v == float64(int(v))
+			}
+			if !valid {
+				return nil, errors.New("ttl must be an integer between 1 and 86400 seconds")
+			}
+		}
 		ttl := intArg(args, "ttl", 3600)
 		if op == "reply" {
 			ttl = intArg(args, "ttl", 86400)

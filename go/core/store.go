@@ -45,6 +45,15 @@ func NewLocalStore(ctx context.Context, files platform.Files, root string) (*Loc
 	if e != nil {
 		return nil, e
 	}
+	entries, e := files.List(ctx, root)
+	if e != nil {
+		return nil, errors.New("local store unavailable")
+	}
+	for _, entry := range entries {
+		if entry.Name == "helper.sqlite3" || entry.Name == "spool" || entry.Name == "results" {
+			return nil, errors.New("Python helper state cannot be opened by the Go helper; use a separate state directory")
+		}
+	}
 	s := &LocalStore{files, root}
 	e = s.transaction(ctx, false, func(*localState) error { return nil })
 	return s, e
