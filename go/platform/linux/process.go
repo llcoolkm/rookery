@@ -28,7 +28,7 @@ func processStat(pid int) ([]string, error) {
 		return nil, errUnsafe
 	}
 	fields := strings.Fields(string(data[i+1:]))
-	if len(fields) < 20 || fields[0] == "Z" {
+	if len(fields) < 20 || !strings.Contains("RSDI", fields[0]) {
 		return nil, errors.New("process unavailable")
 	}
 	return fields, nil

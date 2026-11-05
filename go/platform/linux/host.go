@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"github.com/llcoolkm/rookery/go/platform"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -156,4 +157,43 @@ func (p *paths) HarnessEndpoint(ctx context.Context, provider string, record pla
 func (p *paths) IsWSL() bool {
 	data, e := os.ReadFile("/proc/sys/kernel/osrelease")
 	return e == nil && strings.Contains(strings.ToLower(string(data)), "microsoft")
+}
+
+// Executable resolves a native executable once without shell/PATHEXT fallback.
+func (p *paths) Executable(name string) (string, error) { return ResolveExecutable(name) }
+
+// ControlEndpoint grants a capability for the platform's fixed Codex control
+// socket. Unlike record-based HarnessEndpoint it accepts no caller path. The
+// resolver authenticates and pins its server now; Dial must match that identity.
+func (p *paths) ControlEndpoint(ctx context.Context, provider string) (platform.Endpoint, error) {
+	if provider != "codex" {
+		return "", errors.New("provider has no fixed control endpoint")
+	}
+	root, e := p.ProviderData(provider)
+	if e != nil {
+		return "", e
+	}
+	path := filepath.Join(root, "app-server-control", "app-server-control.sock")
+	if e = socketSafe(path); e != nil {
+		return "", e
+	}
+	dialer := net.Dialer{}
+	raw, e := dialer.DialContext(ctx, "unix", path)
+	if e != nil {
+		return "", errors.New("local endpoint unavailable")
+	}
+	facility := &ipc{paths: p}
+	conn, e := facility.authenticate(ctx, raw.(*net.UnixConn), nil)
+	if e != nil {
+		return "", e
+	}
+	defer conn.Close()
+	ref, e := conn.Peer()
+	if e != nil {
+		return "", e
+	}
+	if e = socketSafe(path); e != nil {
+		return "", e
+	}
+	return p.issue(endpoint{path: path, expected: &ref})
 }

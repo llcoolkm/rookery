@@ -279,3 +279,56 @@ func TestSeparateStateAndUnitRendering(t *testing.T) {
 		t.Fatal("accepted unit injection")
 	}
 }
+
+func TestFixedControlEndpoint(t *testing.T) {
+	host, root := testHost(t)
+	ctx := context.Background()
+	t.Setenv("CODEX_HOME", root)
+	dir := filepath.Join(root, "app-server-control")
+	os.Mkdir(dir, 0700)
+	socket := filepath.Join(dir, "app-server-control.sock")
+	l, e := net.ListenUnix("unix", &net.UnixAddr{Name: socket, Net: "unix"})
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer l.Close()
+	os.Chmod(socket, 0600)
+	resolver := host.Paths.(interface {
+		ControlEndpoint(context.Context, string) (platform.Endpoint, error)
+	})
+	if _, e = resolver.ControlEndpoint(ctx, "unknown"); e == nil {
+		t.Fatal("arbitrary provider control capability")
+	}
+	ep, e := resolver.ControlEndpoint(ctx, "codex")
+	if e != nil {
+		t.Fatal(e)
+	}
+	c, e := host.IPC.Dial(ctx, ep)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer c.Close()
+	ref, e := c.Peer()
+	if e != nil || ref.PID != os.Getpid() {
+		t.Fatal("control server not pinned")
+	}
+}
+func TestWSLPlanPreservesStartup(t *testing.T) {
+	spec := platform.ServiceSpec{Executable: "/native/program", StateDir: "/state/example"}
+	command, e := WSLBootCommand(spec, "example", "/account/example", "/native/bin")
+	if e != nil || !strings.Contains(command, "'service' 'supervise' '--detach'") {
+		t.Fatal("invalid WSL boot command")
+	}
+	original := "[network]\nkey=value\n[boot]\ncommand=existing\n[interop]\nenabled=true\n"
+	merged := MergeWSLConfig(original, command, "")
+	if !strings.Contains(merged, "command=existing; "+command+"\n") || !strings.Contains(merged, "[interop]\nenabled=true") {
+		t.Fatal("lost WSL configuration")
+	}
+	if MergeWSLConfig(merged, command, "") != merged {
+		t.Fatal("WSL merge not idempotent")
+	}
+	changed := MergeWSLConfig(merged, "replacement", command)
+	if !strings.Contains(changed, "command=existing; replacement\n") {
+		t.Fatal("old helper command not replaced")
+	}
+}
