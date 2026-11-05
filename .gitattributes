@@ -1,0 +1,5 @@
+*.go text eol=lf
+go/** text eol=lf
+docs/contract.md text eol=lf
+go/contract/** text eol=lf
+**/testdata/** text eol=lf

@@ -73,6 +73,16 @@ jobs:
         with:
           go-version-file: go/go.mod
           cache: false
+      - name: Enforce portable core and providers
+        run: |
+          # Inspect imports of every reachable project package. The standard
+          # library itself uses os/syscall (including time and encoding/json).
+          deps=$(go list -deps -f '{{if not .Standard}}{{range .Imports}}{{println .}}{{end}}{{end}}' ./core ./provider/...)
+          forbidden=$(printf '%s\n' "$deps" | grep -E '^(os|os/exec|syscall|path/filepath|net)$' || true)
+          if [ -n "$forbidden" ]; then
+            printf 'OS dependencies in core/provider:\n%s\n' "$forbidden"
+            exit 1
+          fi
       - run: go vet ./...
       - run: go test ./...
       - name: Build for Windows

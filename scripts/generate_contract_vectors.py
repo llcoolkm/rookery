@@ -10,16 +10,18 @@ import asyncio
 import copy
 import hashlib
 import json
+import io
 from pathlib import Path
 import tempfile
 from unittest.mock import patch
 import uuid
 
-from rookery.client import Client
-from rookery.core import Error
+from rookery.client import Client, configure
 from rookery.daemon import render
-from rookery.hub import Hub, create_app
-from rookery.mcp import Server
+from rookery.hub import Hub, Unavailable, create_app
+from rookery.mcp import Server, serve, MAX_LINE, codex_client_resolver
+from rookery.local_store import Store
+from rookery.common import atomic
 from rookery.request_ids import new_request_id, request_created, REQUEST_WINDOW
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -37,7 +39,7 @@ def request_id(when=NOW):
         return new_request_id()
 
 
-async def http_call(app, node, request, *, authenticated=True):
+async def http_call(app, node, request, *, authenticated=True, path="/v2/rpc"):
     # Ephemeral synthetic credentials never enter the generated JSON.
     credential = ("fixture-only-" + node + "-") * 4
     events = []
@@ -45,13 +47,13 @@ async def http_call(app, node, request, *, authenticated=True):
         return {"type": "http.request", "body": json.dumps(request).encode()}
     async def send(event):
         events.append(event)
-    await app({"type": "http", "method": "POST", "path": "/v2/rpc", "headers":
+    await app({"type": "http", "method": "POST", "path": path, "headers":
                [(b"authorization", ("Bearer " + credential).encode())] if authenticated else []}, receive, send)
     return events[0]["status"], json.loads(events[1]["body"])
 
 
 def generate_vectors():
-    vectors = {"format_version": 1, "hub": [], "delivery": [], "mcp": [], "local": [], "request_ids": []}
+    vectors = {"format_version": 1, "hub": [], "delivery": [], "mcp": [], "local": [], "request_ids": [], "mcp_frames": []}
     alpha = "alpha/claude:" + identifier(1)
     beta = "beta/codex:" + identifier(2)
     with tempfile.TemporaryDirectory() as temporary, patch("rookery.hub.time.time", return_value=NOW):
@@ -62,10 +64,13 @@ def generate_vectors():
         hub = Hub(root / "hub.sqlite3")
         try:
             app = create_app(hub, tokens)
-            def call(name, node, op, data=None, *, authenticated=True):
+            def call(name, node, op, data=None, *, authenticated=True, path="/v2/rpc"):
                 request = {"op": op, "data": data or {}}
-                status, response = asyncio.run(http_call(app, node, request, authenticated=authenticated))
-                vectors["hub"].append(copy.deepcopy({"name": name, "node": node, "request": request, "status": status, "response": response}))
+                status, response = asyncio.run(http_call(app, node, request, authenticated=authenticated, path=path))
+                limits = {"request_too_large": {"max_request": 1}, "quota_overloaded": {"max_requests": 0}}
+                vectors["hub"].append(copy.deepcopy({"name": name, "node": node, "path": path, "request": request, "status": status, "response": response,
+                    **({"limits": limits[name]} if name in limits else {}),
+                    **({"fault": "storage_unavailable"} if name == "storage_unavailable" else {})}))
                 return copy.deepcopy(response.get("result"))
             call("unauthorized", "alpha", "list", authenticated=False)
             for node, provider, number, pid in (("alpha", "claude", 1, 101), ("beta", "codex", 2, 202)):
@@ -99,18 +104,49 @@ def generate_vectors():
                 call(name, "alpha", "enroll", {"target": alpha, "_request_id": request_id(when)})
             call("invalid_body", "alpha", "send", {"actor": alpha, "to": beta, "id": identifier(16), "body": " "})
             call("unknown_operation", "alpha", "unknown")
-            for name, message in (("ask", ask), ("reply", reply), ("followup", followup), ("inform", inform)):
+            call("not_found", "alpha", "list", path="/missing")
+            with patch("rookery.hub.MAX_REQUEST", 1):
+                call("request_too_large", "alpha", "list")
+            with patch("rookery.hub.MAX_REQUESTS", 0):
+                call("quota_overloaded", "alpha", "enroll", {"target": alpha, "_request_id": request_id(NOW + 1)})
+            with patch.object(hub, "call", side_effect=Unavailable()):
+                call("storage_unavailable", "alpha", "list")
+            # A held result releases only the definite pre-I/O claim. Re-enroll
+            # the recipient after the earlier disable/clear-alias cases.
+            call("reenroll_beta", "beta", "enroll", {"target": beta})
+            held = call("send_held", "alpha", "send", {"actor": alpha, "to": beta, "id": identifier(19), "body": "Hold before I/O."})
+            with patch("rookery.hub.uuid.uuid4", return_value=uuid.UUID(identifier(91))):
+                held_claim = call("claim_held", "beta", "claim", {"message_id": held["id"]})["delivery"]
+            call("result_held", "beta", "result", {"message_id": held["id"], "claim_id": held_claim["claim_id"], "status": "held", "detail": ""})
+            snapshots = call("empty_detail_status", "alpha", "status")["messages"]
+            empty_detail = next(row for row in snapshots if row["id"] == held["id"])
+            thread = call("hop_root", "alpha", "send", {"actor": alpha, "to": beta, "id": identifier(20), "body": "Bounded thread."})
+            for hop in range(1, 7):
+                node, actor = ("beta", beta) if hop % 2 else ("alpha", alpha)
+                result = call("hop_limit" if hop == 6 else "hop_" + str(hop), node, "reply",
+                    {"actor": actor, "message_id": thread["id"], "id": identifier(20 + hop), "body": "Thread continuation."})
+                if result is not None:
+                    thread = result
+            with hub._tx() as db:
+                db.execute("UPDATE metadata SET value='1' WHERE key='event_floor'")
+            call("sync_reset_required", "beta", "sync", {"cursor": 0, "wait": 0})
+            for name, message in (("ask", ask), ("reply", reply), ("followup", followup), ("inform", inform), ("empty_detail", empty_detail)):
                 text = render(message)
                 vectors["delivery"].append({"name": name, "message": message, "envelope": json.loads(text.splitlines()[1]), "text": text})
             messages = {row["id"]: row for row in hub.call("alpha", "status")["messages"]}
-            local_client = Client.__new__(Client)
-            local_client.path = root
-            admitted = []
-            local_client._admit = admitted.append
+            local_root = root / "local"
+            configure(local_root, "beta", "https://hub.invalid", "fixture-only-token-" * 4)
+            local_client = Client(local_root, actor=beta)
+            store = Store(local_root)
             with patch("rookery.client.new_request_id", return_value=request_id()):
                 queued = local_client.request("send", send_data, timeout=0)
-            vectors["local"].append({"name": "queued_send", "request": admitted[0], "response": queued})
-            _mcp_vectors(vectors, alpha, beta, ask, reply, followup, messages, queued)
+            spool_path = local_root / "spool" / (queued["request_id"] + ".json")
+            admitted = json.loads(spool_path.read_text())
+            store.import_spool()
+            vectors["local"].append({"name": "queued_send", "request": admitted, "response": queued,
+                                     "imported": store.commands()[0], "spool_removed": not spool_path.exists()})
+            _mcp_vectors(vectors, local_client, store, alpha, beta, ask, reply, followup, messages)
+
         finally:
             hub.close()
     for when in (NOW, NOW - REQUEST_WINDOW, NOW + 301):
@@ -120,26 +156,39 @@ def generate_vectors():
     return vectors
 
 
-def _mcp_vectors(vectors, alpha, beta, ask, reply, followup, messages, queued):
-    class FixtureClient:
-        def identity(self):
-            return beta
-        def peers(self):
-            return {"sessions": [{"key": alpha, "status": "idle", "enrolled": True, "alias": "alpha", "name": "Alpha"}, {"key": beta, "status": "busy", "enrolled": True, "online": False}, {"key": "unlisted", "enrolled": False}], "stale": False}
-        def send(self, **arguments):
-            if arguments["body"] == "reject":
-                raise Error("session is not enrolled")
-            return Client.compact(queued if arguments["body"] == "queued" else ask)
-        def reply(self, **arguments):
-            return Client.compact(followup if arguments["message_id"] == reply["id"] else reply)
-        def inbox(self, **arguments):
-            return [Client.compact(messages[ask["id"]]), Client.compact(reply)]
-        def status(self, message_id=None):
-            return Client.compact(messages[ask["id"]]) if message_id else {"running": True, "connected": True}
-    server = Server(FixtureClient())
+def _mcp_vectors(vectors, client, store, alpha, beta, ask, reply, followup, messages):
+    # The real Client reads synthetic helper snapshots and persists every
+    # mutation through its actual atomic spool admission and import path.
+    directory = {"sessions": [{"key": alpha, "status": "idle", "enrolled": True, "alias": "alpha", "name": "Alpha"},
+                               {"key": beta, "status": "busy", "enrolled": True, "online": False},
+                               {"key": "unlisted", "enrolled": False}], "updated": NOW}
+    atomic(client.path / "directory.json", directory)
+    first = {**messages[ask["id"]], "status": "read", "read_at": NOW}
+    second = {**followup, "status": "pending", "read_at": None}
+    store.apply([{"type": "message", "data": first}, {"type": "message", "data": second}], 0)
+    server = Server(client)
     def exchange(name, method, params=None):
         request = {"jsonrpc": "2.0", "id": len(vectors["mcp"]) + 1, "method": method, "params": params or {}}
-        vectors["mcp"].append({"name": name, "request": request, "response": server.handle(request)})
+        # Pre-existing helper result files model the other local process. The
+        # Client still writes the command spool and reads the result itself.
+        rid = request_id(NOW + len(vectors["mcp"]) + 1)
+        result_path = client.path / "results" / (rid + ".json")
+        operation = (params or {}).get("name", "")
+        arguments = (params or {}).get("arguments", {})
+        if name == "operation_error":
+            atomic(result_path, {"ok": False, "error": "session is not enrolled"})
+        elif operation in ("send", "reply") and name != "send_queued":
+            value = ask if operation == "send" else followup if arguments.get("message_id") == reply["id"] else reply
+            atomic(result_path, {"ok": True, "result": value})
+        with patch("rookery.client.new_request_id", return_value=rid), patch("rookery.client.uuid.uuid4", return_value=uuid.UUID(identifier(80))), patch("rookery.client.time.monotonic", side_effect=[0, 0, 6] * 10):
+            response = server.handle(request)
+        record = {"name": name, "request": request, "response": response}
+        spool_path = client.path / "spool" / (rid + ".json")
+        if spool_path.exists():
+            record["spooled"] = json.loads(spool_path.read_text())
+        if operation == "inbox":
+            record["pending_reads"] = [list(pair) for pair in sorted(store.pending_reads())]
+        vectors["mcp"].append(record)
     exchange("initialize_required", "tools/list")
     # Freeze distribution metadata independently of the installation environment.
     with patch("rookery.mcp.PACKAGE_VERSION", "0.3.1"):
@@ -148,6 +197,10 @@ def _mcp_vectors(vectors, alpha, beta, ask, reply, followup, messages, queued):
     def tool(name, operation, arguments=None):
         exchange(name, "tools/call", {"name": operation, "arguments": arguments or {}})
     tool("peers", "peers")
+    atomic(client.path / "directory.json", {**directory, "updated": NOW - 46})
+    tool("peers_stale", "peers")
+    (client.path / "directory.json").unlink()
+    tool("peers_missing", "peers")
     tool("send_compact", "send", {"to": "beta", "body": "Review."})
     tool("send_queued", "send", {"to": "beta", "body": "queued"})
     tool("send_verbose", "send", {"to": "beta", "body": "Review.", "verbose": True})
@@ -156,7 +209,10 @@ def _mcp_vectors(vectors, alpha, beta, ask, reply, followup, messages, queued):
     tool("inbox_compact", "inbox")
     tool("inbox_include_read", "inbox", {"include_read": True})
     tool("inbox_peek", "inbox", {"peek": True})
+    tool("health_missing", "status")
+    atomic(client.path / "health.json", {"running": True, "connected": True, "updated": NOW})
     tool("health", "status")
+    tool("unknown_local", "status", {"message_id": identifier(99)})
     tool("message_status", "status", {"message_id": ask["id"]})
     tool("message_status_verbose", "status", {"message_id": ask["id"], "verbose": True})
     tool("legacy_tool", "rookery_status", {"message_id": ask["id"]})
@@ -166,6 +222,22 @@ def _mcp_vectors(vectors, alpha, beta, ask, reply, followup, messages, queued):
     tool("invalid_integer", "send", {"to": "beta", "body": "Review.", "ttl": True})
     tool("missing_body", "send", {"to": "beta"})
     exchange("unknown_method", "unknown")
+    identity_server = Server(client_resolver=codex_client_resolver(client.path))
+    identity_server.initialized = True
+    identity_request = {"jsonrpc": "2.0", "id": 100, "method": "tools/call", "params": {"name": "status", "arguments": {}}}
+    vectors["mcp"].append({"name": "missing_caller_identity", "request": identity_request, "response": identity_server.handle(identity_request)})
+    for name, frame in (("parse_error", b"{\n"), ("invalid_utf8", b"\xff\n"),
+                        ("invalid_request", b"[]\n"),
+                        ("oversize_then_ping", b"x" * (MAX_LINE + 1) + b"\n" + b'{"jsonrpc":"2.0","id":1,"method":"ping"}\n'),
+                        ("notification_then_ping", b'{"jsonrpc":"2.0","method":"notifications/initialized"}\n' + b'{"jsonrpc":"2.0","id":1,"method":"ping"}\n')):
+        output = io.BytesIO()
+        serve(client, io.BytesIO(frame), output)
+        # Oversize input is described by a repeat count to keep public vectors
+        # small; replay reconstructs precisely the same bytes.
+        vectors["mcp_frames"].append({"name": name,
+            "input_hex": frame.hex() if len(frame) <= MAX_LINE else None,
+            **({"repeat": "x", "count": MAX_LINE + 1, "suffix": '\n{"jsonrpc":"2.0","id":1,"method":"ping"}\n'} if len(frame) > MAX_LINE else {}),
+            "responses": [json.loads(line) for line in output.getvalue().splitlines()]})
 
 
 def main():

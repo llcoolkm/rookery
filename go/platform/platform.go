@@ -1,38 +1,46 @@
 // Package platform defines the only host facilities available to core and providers.
 // Implementations must fail closed when ownership or process identity cannot be
-// established. Paths are opaque: callers never construct OS-specific paths.
+// established. Paths and endpoint handles are opaque: callers never construct
+// OS-specific paths.
 package platform
 
 import (
 	"context"
 	"io"
-	"net"
+	"time"
 )
 
-// Identity is an authenticated local peer. Principal is a decimal UID on Linux
-// or a SID on Windows. PID alone must never establish identity.
-type Identity struct {
-	Principal string
-	PID       int
-}
-
-// Connection carries credentials obtained from the OS, never from payload data.
+// Connection carries OS credentials captured and pinned before Accept/Dial return.
+// Peer returns that original ProcessRef, never a fresh lookup of a reused PID.
+// Process exit/identity change invalidates use; inability to pin fails closed.
 type Connection interface {
-	net.Conn
-	Peer() (Identity, error)
+	io.ReadWriteCloser
+	SetDeadline(time.Time) error
+	SetReadDeadline(time.Time) error
+	SetWriteDeadline(time.Time) error
+	Peer() (ProcessRef, error)
 }
 
-// Listener returns authenticated connections, rejecting foreign principals.
+// Listener authenticates clients and rejects foreign principals.
 type Listener interface {
 	Accept(context.Context) (Connection, error)
 	Close() error
 }
 
-// IPC supports AF_UNIX on Linux and Windows, or secured named pipes on Windows.
-// Listen must protect the endpoint before accepting any connection.
+// Endpoint is an opaque host-issued handle, not a path. Implementations reject
+// unissued handles. Harness addresses enter only through Paths.HarnessEndpoint.
+type Endpoint string
+
+// IPC supports AF_UNIX or secured Windows pipes. Listen protects the endpoint
+// before accepting. Dial authenticates the server: Linux uses SO_PEERCRED plus
+// socket owner/no-symlink checks; Windows pipes use GetNamedPipeServerProcessId
+// plus token SID and endpoint owner/DACL. Capture a pinned ProcessRef in both
+// directions and compare the expected principal and any expected harness server.
+// Revalidate owner/no-follow and identity at connect to prevent substitution.
+// Unsupported authentication fails closed; a path or pipe name is not identity.
 type IPC interface {
-	Listen(context.Context, string) (Listener, error)
-	Dial(context.Context, string) (Connection, error)
+	Listen(context.Context, Endpoint) (Listener, error)
+	Dial(context.Context, Endpoint) (Connection, error)
 }
 
 // ProcessRef pins a PID to its start time and machine boot identity. Start is an
@@ -50,6 +58,48 @@ type Process interface {
 	Pin(context.Context, ProcessRef) error
 	Ancestors(context.Context, ProcessRef) ([]ProcessRef, error)
 	CommandLine(context.Context, ProcessRef) ([]string, error)
+}
+
+// Spec describes direct native execution. Path is an absolute platform-validated
+// executable path; no shell or fallback. Windows refuses .cmd/.bat regardless of
+// case, shell interpreters and shell/PATHEXT resolution. Args contain public
+// options only: peer text never enters Windows argv (also limited to 32767
+// characters); use Stdin or a verified private file. Timeout/MaxOutput are positive.
+type Spec struct {
+	Path      string
+	Args      []string
+	Stdin     []byte
+	Timeout   time.Duration
+	MaxOutput int64
+}
+
+// ExecState distinguishes proven pre-start failure from known completion and a
+// command that may have started but whose completion cannot be established.
+type ExecState uint8
+
+const (
+	// Uncertain is the safe zero value: never automatically retry this outcome.
+	Uncertain ExecState = iota
+	NotStarted
+	Completed
+)
+
+// ExecResult accompanies errors too. Timeout, cancellation, output limit, lost
+// handle or wait failure after start is Uncertain unless completion is positively
+// established. A known nonzero exit is Completed. Stdout/Stderr together are
+// bounded by Spec.MaxOutput; output is untrusted.
+type ExecResult struct {
+	State          ExecState
+	ExitCode       int // meaningful only when State == Completed
+	Stdout, Stderr []byte
+	Truncated      bool
+}
+
+// Executor owns process creation, bounded I/O, timeout and cleanup. NotStarted
+// requires proof that no command could have run. Never replay Uncertain delivery
+// or send raw errors to the hub: redact host paths, process/session data, secrets.
+type Executor interface {
+	Exec(context.Context, Spec) (ExecResult, error)
 }
 
 // File is an already verified regular file; Sync persists its contents.
@@ -106,7 +156,17 @@ type Service interface {
 // ProviderData locates harness-owned data without exposing OS paths in core.
 type Paths interface {
 	StateDir() (string, error)
-	Endpoint(string) (string, error)
+	Endpoint(string) (Endpoint, error)
+	// HarnessEndpoint imports an address parsed by trusted provider code from
+	// record, a still-open Files.OpenNoFollow handle under ProviderData(provider).
+	// Verify that this host issued the record handle, its provider-root provenance,
+	// owner and no-follow ancestry; reject arbitrary/unverified handles. Provider
+	// code must derive address and expected server from that same verified record,
+	// never tool/peer payloads. Harness-specific record parsing stays in provider.
+	// Verify endpoint/ancestry ownership and no-follow rules, bind server, and
+	// issue an opaque handle. Absolute addresses are allowed only as input here;
+	// Files.OpenNoFollow continues to use a confined relative record name.
+	HarnessEndpoint(ctx context.Context, provider string, record File, address string, server ProcessRef) (Endpoint, error)
 	ProviderData(string) (string, error)
 	IsWSL() bool
 }
@@ -114,6 +174,7 @@ type Paths interface {
 // Host groups one consistent implementation of the platform boundary.
 type Host struct {
 	IPC     IPC
+	Exec    Executor
 	Process Process
 	Files   Files
 	Service Service

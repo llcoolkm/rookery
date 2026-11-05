@@ -23,7 +23,7 @@ fragment or path other than empty or `/`; trailing `/` is removed. Explicit
 loopback development permits HTTP only for the loopback names enumerated by the
 Python validator. Redirects MUST NOT be followed. TLS validation remains enabled.
 (`src/rookery/common.py:82`, `src/rookery/common.py:94`,
-`src/rookery/daemon.py:28`.)
+`src/rookery/daemon.py:30`.)
 
 Exactly one `Authorization: Bearer TOKEN` header binds the entire request to a
 node; actor fields cannot override that node. The hub accepts bearer lengths
@@ -42,7 +42,7 @@ of that response. (`src/rookery/hub.py:77`, `src/rookery/hub.py:908`,
 | JSON data | finite numbers; no NaN/Infinity; object data; canonical hub encoding is sorted keys, compact separators, UTF-8 without ASCII escaping | `src/rookery/hub.py:55`, `src/rookery/hub.py:64`, `src/rookery/hub.py:365`, `src/rookery/hub.py:928` |
 | Message body | nonblank text, at most 16384 UTF-8 bytes | `src/rookery/core.py:4`, `src/rookery/hub.py:570` |
 | TTL | actual integer (not boolean), 1–86400 seconds | `src/rookery/hub.py:71`, `src/rookery/hub.py:566` |
-| Helper HTTP response | at most 32 MiB; timeout 35 seconds | `src/rookery/daemon.py:22`, `src/rookery/daemon.py:37`, `src/rookery/daemon.py:49` |
+| Helper HTTP response | at most 32 MiB; timeout 35 seconds | `src/rookery/daemon.py:24`, `src/rookery/daemon.py:37`, `src/rookery/daemon.py:51` |
 | Publish | at most 128 sessions per call; session name at most 256 characters | `src/rookery/hub.py:423` |
 | Sync/page | limit 1–128, default 128; cursor/after integer 0–2^63−1; sync wait finite 0–25 seconds | `src/rookery/hub.py:531`, `src/rookery/hub.py:547`, `src/rookery/hub.py:932` |
 | Discovery freshness | live session updated within 60 seconds, never future-dated | `src/rookery/hub.py:33`, `src/rookery/hub.py:345`, `src/rookery/hub.py:519` |
@@ -54,7 +54,7 @@ The helper MUST retain commands on unknown/retryable outcomes. HTTP
 failure, interrupted/oversized/invalid responses retain the original command.
 A successful HTTP response with `ok` other than true is a definite remote error.
 The Go transport MUST preserve these distinctions. (`src/rookery/daemon.py:38`,
-`src/rookery/daemon.py:49`, `src/rookery/daemon.py:203`.)
+`src/rookery/daemon.py:51`, `src/rookery/daemon.py:203`.)
 
 ## Identities and idempotency
 
@@ -86,7 +86,11 @@ request returns its cached result; send/reply return the current authoritative
 message, not an obsolete snapshot. Changing content under an ID MUST fail.
 Message IDs are separate canonical UUIDs (Python generates UUIDv4); they bind
 permanently to sender, resolved recipient, body, kind, parent, TTL and requested
-absolute expiry. A repeated matching message ID returns its current row even if
+absolute expiry. At local send/reply admission the helper MUST set absolute
+`expires = now + ttl` and persist it with the command, so offline queueing never
+renews the deadline on upload or retry. (`src/rookery/client.py:149`,
+`src/rookery/client.py:153`.) A repeated matching message ID returns its current
+row even if
 a different request ID is used; a mismatching binding MUST fail. Retention MUST
 NOT permit replay under old IDs. (`src/rookery/hub.py:375`,
 `src/rookery/hub.py:394`, `src/rookery/hub.py:409`,
@@ -117,7 +121,7 @@ universally rejected; do not invent stricter hub behavior.
 | `received` | `message_id` | `{message_id,status,received_by_host}`. Recipient node only; sets received_by_host and received_at, independently of model receipt. | `src/rookery/hub.py:638` |
 | `claim` | `message_id?` | `{delivery:null}` or `{delivery:{message:MESSAGE,session:SESSION,claim_id:UUID}}`. Only recipient-node pending messages; first eligible among first 128; live enrolled session and pinned PID; polling never pushed; missing admission means idle. Durable transition to dispatching creates one claim. | `src/rookery/hub.py:673` |
 | `result` | `message_id,claim_id,status,detail?=""` | `{message_id,status,received_by_host}`. Matching claim, status submitted/held/failed/uncertain, detail ≤4096 characters. Applies only while dispatching; held restores read if read_at exists, otherwise pending. | `src/rookery/hub.py:638` |
-| `ack` | `actor,message_id` | Same delivery result shape. Enrolled addressed recipient only; active message becomes acknowledged unless already acknowledged/replied. | `src/rookery/hub.py:638` |
+| `ack` | `actor,message_id` | Same delivery result shape. Enrolled addressed recipient only; active message becomes acknowledged unless already acknowledged/replied. Expired/cancelled messages fail with `message is no longer active`. | `src/rookery/hub.py:638` |
 | `reconcile` | `message_id,action:"cancel"` | Same delivery result shape. Recipient node only; explicit cancellation preserves acknowledged/replied/cancelled, otherwise sets cancelled. | `src/rookery/hub.py:638` |
 
 MESSAGE contains `v:1,id,sender,recipient,body,kind,in_reply_to,ttl,
@@ -130,6 +134,10 @@ body_retained`. Timestamps are Unix seconds, potentially fractional.
 (`src/rookery/hub.py:570`, `src/rookery/hub.py:600`,
 `src/rookery/hub.py:266`, `src/rookery/hub.py:284`,
 `src/rookery/hub.py:629`, `src/rookery/hub.py:643`.)
+
+The `detail` field remains present even when the reported detail is the empty
+string; absence and `"detail":""` are distinct. (`src/rookery/hub.py:664`,
+`src/rookery/hub.py:668`.)
 
 A root and its descendants permit hops 0–5; a sixth edge fails with the exact
 six-message limit text. Inform messages cannot be answered; an ask already
@@ -263,7 +271,7 @@ decision; the Python format baseline is `src/rookery/local_store.py:28`,
 | `admission.lock`, `daemon.lock` | no-follow advisory locks serialize queue admission/import and sole helper ownership | `src/rookery/local_store.py:17`, `src/rookery/daemon.py:95` |
 | `directory.json` | `{sessions:[...],updated:SECONDS}`; after >45 seconds local peer view stale, all peers offline/unknown | `src/rookery/daemon.py:285`, `src/rookery/client.py:135` |
 | `health.json` | updated,pid,running,connected,node,error,provider_errors,busy_delivery. Connected requires last sync <40s; client view >45s stale forces disconnected. | `src/rookery/daemon.py:294`, `src/rookery/client.py:193` |
-| `network/polling/PROVIDER-UUID.json` | provider,id,pid,name,starttime,boot_id; private bounded ≤4096-byte regular file, exact filename, matching live owned process pin; stale/reused/rebooted/stopped registrations omitted | `src/rookery/common.py:73`, `src/rookery/polling.py:42`, `src/rookery/polling.py:69`, `src/rookery/polling.py:88` |
+| `network/polling/PROVIDER-UUID.json` | provider,id,pid,name,starttime,boot_id; private bounded ≤4096-byte regular file, exact filename, matching live owned process pin; stale/reused/rebooted/stopped registrations omitted; published as status waiting and delivery polling | `src/rookery/common.py:73`, `src/rookery/polling.py:42`, `src/rookery/polling.py:69`, `src/rookery/polling.py:88`, `src/rookery/polling.py:113` |
 
 
 Python AGY records live in `network/endpoints/agy-UUID.json`, with sibling
@@ -278,7 +286,11 @@ records. (`src/rookery/agy_endpoint.py:71`,
 `src/rookery/agy_endpoint.py:239`, `src/rookery/agy_endpoint.py:263`.)
 
 Spool import is bounded to 64 records/cycle and idempotent; completed results win
-over repeat spool files. Cursor and message event application share one durable
+over repeat spool files. A definitely rejected native `result` report is recorded
+in `report_error` and marked reported, removing it from the report queue while
+retaining the attempt evidence; a retryable/unknown failure leaves it queued.
+(`src/rookery/daemon.py:194`, `src/rookery/daemon.py:198`,
+`src/rookery/daemon.py:201`.) Cursor and message event application share one durable
 transaction. Store metadata includes cursor and recovery diagnostics. Go storage
 MUST preserve these durability guarantees even if its serialization differs.
 (`src/rookery/local_store.py:80`, `src/rookery/local_store.py:134`,
@@ -347,13 +359,20 @@ Unknown local message status is `{id,status:"unknown_local"}`; absent helper
 health is `{running:false,connected:false,detail:"helper has not started"}`.
 (`src/rookery/client.py:145`, `src/rookery/client.py:184`.)
 
+With a bound session, local message status MUST refuse a message whose sender and
+recipient are both another session, using `message belongs to another session`.
+(`src/rookery/client.py:190`, `src/rookery/client.py:191`.)
+
 Identity is bound by explicit per-session configuration or fresh harness identity,
 never tool arguments. Codex uses canonical `_meta.threadId`, rejects conflicting
 sessionId or x-codex-turn-metadata thread/session IDs. AGY uses canonical
 `_meta["antigravity.google/conversation_id"]`. Claude resolves nearest live
 ancestor through authoritative session discovery, pins process start time, checks
 ancestry before and after discovery and re-resolves session UUID every call.
-Missing/ambiguous/stale identities fail closed. Same-account processes remain one
+Missing/ambiguous/stale identities fail closed with JSON-RPC error −32602
+(`InvalidParams`), rather than a successful JSON-RPC tool result with isError.
+(`src/rookery/mcp.py:242`, `src/rookery/mcp.py:298`,
+`src/rookery/mcp.py:320`, `src/rookery/mcp.py:344`.) Same-account processes remain one
 trust domain; harness metadata is not an adversarial security boundary.
 (`src/rookery/mcp.py:274`, `src/rookery/mcp.py:303`,
 `src/rookery/mcp.py:325`, `src/rookery/mcp_identity.py:50`.)
@@ -365,10 +384,19 @@ credentials, URLs, paths, exception internals or native stderr through generic
 errors. The following are protocol-visible, not Go implementation diagnostics.
 (`src/rookery/hub.py:948`, `src/rookery/mcp.py:234`.)
 
+Go MUST also redact `detail` before persistence and transmission to the hub:
+use bounded value-free provider outcome texts, keeping raw exceptions, native
+stderr, paths, credentials and peer content out of delivery diagnostics. This is
+a deliberate security strengthening over Python, whose provider exception and
+Claude submission paths currently include raw `str(exc)` in transmitted detail.
+That Python gap is documented, not compatibility behavior to reproduce.
+(`src/rookery/daemon.py:272`, `src/rookery/claude_adapter.py:168`,
+`src/rookery/claude_adapter.py:179`.)
+
 | Condition | Status / exact error text | Source |
 | --- | --- | --- |
 | Missing/invalid bearer | HTTP 401; `unauthorized` | `src/rookery/hub.py:908` |
-| Oversized HTTP body | HTTP 413; `request too large` | `src/rookery/hub.py:921` |
+| Oversized HTTP body | HTTP 413; `request too large` | `src/rookery/hub.py:923` |
 | Admission rejection | HTTP 429; `hub admission quota reached`, code overloaded, retryable true | `src/rookery/hub.py:948` |
 | Storage failure | HTTP 503; `hub storage unavailable`, retryable true | `src/rookery/hub.py:950` |
 | Malformed fields not otherwise fixed | HTTP 400; `invalid request or operation not permitted` (or Hub.call `invalid request fields`) | `src/rookery/hub.py:418`, `src/rookery/hub.py:955` |
@@ -376,17 +404,21 @@ errors. The following are protocol-visible, not Go implementation diagnostics.
 | UUID malformed / noncanonical | `ID must be a UUID` / `ID must be a canonical UUID` | `src/rookery/common.py:23` |
 | Wrong node | `actor or target belongs to another node` | `src/rookery/common.py:47` |
 | Not enrolled / ambiguous alias | `session is not enrolled` / `alias must identify exactly one enrolled session` | `src/rookery/hub.py:317`, `src/rookery/hub.py:324` |
-| Invalid ID lifetime | `request ID is expired or from a future clock; reconcile before creating a new request` | `src/rookery/hub.py:384` |
-| Legacy lifetime ended | `legacy request grace period ended; upgrade the client and reconcile queued requests` | `src/rookery/hub.py:390` |
+| Invalid ID lifetime | `request ID is expired or from a future clock; reconcile before creating a new request` | `src/rookery/hub.py:389` |
+| Legacy lifetime ended | `legacy request grace period ended; upgrade the client and reconcile queued requests` | `src/rookery/hub.py:393` |
 | Rebound request/message | `request ID already used for different content` / `message ID already used for different content or target` | `src/rookery/hub.py:394`, `src/rookery/hub.py:580` |
 | Invalid message / self or deadline | `invalid message body or kind` / `self messaging or an expired deadline is forbidden` | `src/rookery/hub.py:570`, `src/rookery/hub.py:585` |
 | Reply authority / thread cap | `only original recipient can reply` / `thread reached the 6-message limit; send a new message instead` | `src/rookery/hub.py:562`, `src/rookery/hub.py:589` |
 | Reply refusal | `this reply already has a follow-up or was cancelled; send a new message instead`; `only asks and replies can be answered; an inform needs a new message`; `this ask was already answered; reply to the reply for a follow-up`; `this ask expired or was cancelled; send a new message instead` | `src/rookery/hub.py:592` |
 | Claim/result mismatch | `native claim does not match` / `invalid native result` | `src/rookery/hub.py:662` |
+| Inactive ack | `message is no longer active` | `src/rookery/hub.py:652` |
+| Other session local status | `message belongs to another session` | `src/rookery/client.py:191` |
 | Local queue full | `local outgoing queue is full; wait for the helper to reconnect` | `src/rookery/client.py:102` |
-| Network / interrupted response | `hub unavailable; requests remain queued` / `hub response interrupted; original request retained` | `src/rookery/daemon.py:47` |
-| MCP invalid JSON / frame | JSON-RPC −32700 `Parse error` / `Message exceeds size limit` | `src/rookery/mcp.py:258` |
-| MCP malformed request / method / initialization | −32600 `Invalid Request`; −32601 `Method not found`; −32000 `initialize first` | `src/rookery/mcp.py:174`, `src/rookery/mcp.py:200`, `src/rookery/mcp.py:240` |
+| Retryable HTTP failure | `hub HTTP N; requests remain queued` (N is the numeric status) | `src/rookery/daemon.py:46` |
+| Oversized / malformed hub response | `hub response too large` / `invalid hub response` | `src/rookery/daemon.py:55`, `src/rookery/daemon.py:62` |
+| Network / interrupted response | `hub unavailable; requests remain queued` / `hub response interrupted; original request retained` | `src/rookery/daemon.py:48`, `src/rookery/daemon.py:53` |
+| MCP invalid JSON / frame | JSON-RPC −32700 `Parse error` / `Message exceeds size limit` | `src/rookery/mcp.py:262`, `src/rookery/mcp.py:268` |
+| MCP malformed request / method / initialization | −32600 `Invalid Request`; −32601 `Method not found`; −32000 `initialize first` | `src/rookery/mcp.py:174`, `src/rookery/mcp.py:200`, `src/rookery/mcp.py:241` |
 | MCP argument validation | −32602: `arguments must be an object`; `unknown argument; session identity comes from the harness`; `missing argument: FIELD`; `invalid string: FIELD`; `invalid boolean: FIELD`; `invalid integer: FIELD`; `invalid choice: FIELD`; `unknown tool`; `params must be an object`; `protocolVersion is required` | `src/rookery/mcp.py:142`, `src/rookery/mcp.py:185` |
 | MCP known operation error | Tool result isError true, one text content: `Rookery: ` + fixed error (or `operation failed` if empty) | `src/rookery/mcp.py:234` |
 | MCP unexpected exception | Tool result isError true: `Messaging operation failed. Inspect rookery doctor or helper logs; do not blindly repeat a send with an unknown outcome.` | `src/rookery/mcp.py:237` |

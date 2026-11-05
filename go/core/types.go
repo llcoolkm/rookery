@@ -44,81 +44,88 @@ const (
 // Message is the hub snapshot, not proof of model receipt. Optional booleans
 // and timestamps use pointers so false and zero survive JSON serialization.
 type Message struct {
-	V                int      `json:"v"`
-	TTL              int      `json:"ttl"`
-	RequestedExpires *float64 `json:"requested_expires"`
-	Updated          float64  `json:"updated"`
-	ReceivedAt       *float64 `json:"received_at,omitempty"`
-	BodyRetained     *bool    `json:"body_retained,omitempty"`
-	ID               string   `json:"id"`
-	Sender           string   `json:"sender"`
-	Recipient        string   `json:"recipient"`
-	Kind             Kind     `json:"kind"`
-	Body             string   `json:"body"`
-	Status           Status   `json:"status"`
-	Created          float64  `json:"created"`
-	Expires          float64  `json:"expires"`
-	ReceivedByHost   *bool    `json:"received_by_host,omitempty"`
-	ReadAt           *float64 `json:"read_at,omitempty"`
-	Detail           string   `json:"detail,omitempty"`
-	ReplyID          string   `json:"reply_id,omitempty"`
-	InReplyTo        *string  `json:"in_reply_to"`
-	FollowupID       string   `json:"followup_id,omitempty"`
-	Conversation     string   `json:"conversation,omitempty"`
-	Hops             int      `json:"hops"`
-	ClaimID          string   `json:"claim_id,omitempty"`
+	Extra            map[string]json.RawMessage `json:"-"`
+	V                int                        `json:"v"`
+	TTL              int                        `json:"ttl"`
+	RequestedExpires *float64                   `json:"requested_expires"`
+	Updated          float64                    `json:"updated"`
+	ReceivedAt       *float64                   `json:"received_at,omitempty"`
+	BodyRetained     *bool                      `json:"body_retained,omitempty"`
+	ID               string                     `json:"id"`
+	Sender           string                     `json:"sender"`
+	Recipient        string                     `json:"recipient"`
+	Kind             Kind                       `json:"kind"`
+	Body             string                     `json:"body"`
+	Status           Status                     `json:"status"`
+	Created          float64                    `json:"created"`
+	Expires          float64                    `json:"expires"`
+	ReceivedByHost   *bool                      `json:"received_by_host,omitempty"`
+	ReadAt           *float64                   `json:"read_at,omitempty"`
+	Detail           *string                    `json:"detail,omitempty"`
+	ReplyID          string                     `json:"reply_id,omitempty"`
+	InReplyTo        *string                    `json:"in_reply_to"`
+	FollowupID       string                     `json:"followup_id,omitempty"`
+	Conversation     string                     `json:"conversation,omitempty"`
+	Hops             int                        `json:"hops"`
+	ClaimID          string                     `json:"claim_id,omitempty"`
 }
 
 // Envelope is the native-delivery JSON line. Conversation is omitted when it
 // equals InReplyTo; rendering must escape all Unicode line separators.
 type Envelope struct {
-	ID           string `json:"id"`
-	Sender       string `json:"sender"`
-	Kind         Kind   `json:"kind"`
-	Body         string `json:"body"`
-	InReplyTo    string `json:"in_reply_to,omitempty"`
-	Conversation string `json:"conversation,omitempty"`
+	Extra        map[string]json.RawMessage `json:"-"`
+	ID           string                     `json:"id"`
+	Sender       string                     `json:"sender"`
+	Kind         Kind                       `json:"kind"`
+	Body         string                     `json:"body"`
+	InReplyTo    string                     `json:"in_reply_to,omitempty"`
+	Conversation string                     `json:"conversation,omitempty"`
 }
 
 type RPCRequest struct {
-	Op   string         `json:"op"`
-	Data map[string]any `json:"data"`
+	Extra map[string]json.RawMessage `json:"-"`
+	Op    string                     `json:"op"`
+	Data  json.RawMessage            `json:"data"`
 }
 type RPCResponse struct {
-	OK        bool            `json:"ok"`
-	Result    json.RawMessage `json:"result,omitempty"`
-	Error     string          `json:"error,omitempty"`
-	Code      string          `json:"code,omitempty"`
-	Retryable bool            `json:"retryable,omitempty"`
+	Extra     map[string]json.RawMessage `json:"-"`
+	OK        bool                       `json:"ok"`
+	Result    json.RawMessage            `json:"result,omitempty"`
+	Error     string                     `json:"error,omitempty"`
+	Code      string                     `json:"code,omitempty"`
+	Retryable bool                       `json:"retryable,omitempty"`
 }
 
 // Command is a durable local request. Its identity survives all retries.
 type Command struct {
-	ID      string         `json:"id"`
-	Op      string         `json:"op"`
-	Data    map[string]any `json:"data"`
-	Created float64        `json:"created"`
+	Extra   map[string]json.RawMessage `json:"-"`
+	ID      string                     `json:"id"`
+	Op      string                     `json:"op"`
+	Data    json.RawMessage            `json:"data"`
+	Created float64                    `json:"created"`
 }
 type Event struct {
-	Seq  int64           `json:"seq"`
-	Type string          `json:"type"`
-	Data json.RawMessage `json:"data"`
+	Extra map[string]json.RawMessage `json:"-"`
+	Seq   int64                      `json:"seq"`
+	Type  string                     `json:"type"`
+	Data  json.RawMessage            `json:"data"`
 }
 type Session struct {
-	Node              string `json:"node,omitempty"`
-	Online            *bool  `json:"online,omitempty"`
-	EnrollmentCurrent *bool  `json:"enrollment_current,omitempty"`
-	DeliveryBlocker   string `json:"delivery_blocker,omitempty"`
-	ID                string `json:"id"`
-	Provider          string `json:"provider"`
-	Key               string `json:"key,omitempty"`
-	Name              string `json:"name"`
-	Status            string `json:"status"`
-	PID               int    `json:"pid,omitempty"`
-	Delivery          string `json:"delivery,omitempty"`
-	Admission         string `json:"admission,omitempty"`
-	Enrolled          bool   `json:"enrolled"`
-	Alias             string `json:"alias,omitempty"`
+	Extra             map[string]json.RawMessage `json:"-"`
+	Node              string                     `json:"node,omitempty"`
+	Online            *bool                      `json:"online,omitempty"`
+	EnrollmentCurrent *bool                      `json:"enrollment_current,omitempty"`
+	DeliveryBlocker   string                     `json:"delivery_blocker,omitempty"`
+	ID                string                     `json:"id"`
+	Provider          string                     `json:"provider"`
+	Key               string                     `json:"key,omitempty"`
+	Name              string                     `json:"name"`
+	Status            string                     `json:"status"`
+	PID               int                        `json:"pid,omitempty"`
+	Delivery          string                     `json:"delivery,omitempty"`
+	Admission         string                     `json:"admission,omitempty"`
+	Enrolled          bool                       `json:"enrolled"`
+	Alias             string                     `json:"alias,omitempty"`
 }
 
 // HubClient calls the existing HTTPS /v2/rpc endpoint. A definite rejection
@@ -155,8 +162,9 @@ type Attempt struct {
 // DeliveryResult is held, submitted, failed or uncertain. Only held guarantees
 // no native I/O occurred; submitted is never an acknowledgment by the model.
 type DeliveryResult struct {
-	Status string `json:"status"`
-	Detail string `json:"detail,omitempty"`
+	Extra  map[string]json.RawMessage `json:"-"`
+	Status string                     `json:"status"`
+	Detail string                     `json:"detail,omitempty"`
 }
 
 // Enrollment binds consent and aliases to an exact session, never a reused PID.

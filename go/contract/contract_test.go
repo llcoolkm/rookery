@@ -35,6 +35,10 @@ type vectors struct {
 		Request  core.Command
 		Response json.RawMessage
 	}
+	MCPFrames []struct {
+		Name      string
+		Responses []json.RawMessage
+	} `json:"mcp_frames"`
 	RequestIDs []struct {
 		ID      string
 		Created *float64
@@ -61,7 +65,7 @@ func load(t *testing.T) vectors {
 // bodies. It is not a claim that the phase 1 helper implements the protocol.
 func TestWireModels(t *testing.T) {
 	v := load(t)
-	if len(v.Hub) == 0 || len(v.MCP) == 0 || len(v.Local) == 0 {
+	if len(v.Hub) == 0 || len(v.MCP) == 0 || len(v.Local) == 0 || len(v.MCPFrames) == 0 {
 		t.Fatal("missing protocol fixtures")
 	}
 	for _, c := range v.Hub {
@@ -100,13 +104,19 @@ func TestWireModels(t *testing.T) {
 			if err := json.Unmarshal([]byte(lines[1]), &envelope); err != nil {
 				t.Fatal(err)
 			}
-			if envelope != c.Envelope {
+			if !reflect.DeepEqual(envelope, c.Envelope) {
 				t.Fatal("native text differs from envelope")
 			}
 		})
 	}
 	for _, c := range v.Local {
-		if c.Request.ID != c.Request.Data["_request_id"] {
+		var data struct {
+			RequestID string `json:"_request_id"`
+		}
+		if err := json.Unmarshal(c.Request.Data, &data); err != nil {
+			t.Fatal(err)
+		}
+		if c.Request.ID != data.RequestID {
 			t.Fatal("local durable request identity mismatch")
 		}
 	}

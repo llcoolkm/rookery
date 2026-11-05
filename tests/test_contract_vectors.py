@@ -46,11 +46,54 @@ class ContractVectorsTests(unittest.TestCase):
         self.assertEqual(sent["to"], result("send_verbose")["recipient"])
         self.assertNotIn("body", sent)
         self.assertIn("body", result("send_verbose"))
-        self.assertTrue(result("inbox_compact")[0]["body_omitted"])
-        self.assertNotIn("body", result("inbox_compact")[0])
+        self.assertTrue(result("inbox_compact")[1]["body_omitted"])
+        self.assertNotIn("body", result("inbox_compact")[1])
         self.assertIn("body", result("inbox_include_read")[0])
-        self.assertIn("body", result("inbox_compact")[1])
+        self.assertIn("body", result("inbox_compact")[0])
         self.assertEqual(cases["invalid_boolean"]["error"]["code"], -32602)
+        self.assertEqual(cases["missing_caller_identity"]["error"]["code"], -32602)
+
+    def test_bound_client_reads_and_spool_admission(self):
+        cases = {case["name"]: case for case in self.vectors["mcp"]}
+        def result(name):
+            return json.loads(cases[name]["response"]["result"]["content"][0]["text"])
+        self.assertTrue(result("peers_stale")["stale"])
+        self.assertTrue(all(row["status"] == "unknown" and not row["online"] for row in result("peers_stale")["sessions"]))
+        self.assertTrue(result("peers_missing")["stale"])
+        self.assertEqual(result("unknown_local")["status"], "unknown_local")
+        self.assertFalse(result("health_missing")["running"])
+        inbox = cases["inbox_compact"]
+        self.assertEqual(inbox["spooled"]["op"], "read")
+        self.assertEqual(inbox["spooled"]["data"]["message_ids"], [result("inbox_compact")[0]["id"]])
+        self.assertNotIn("spooled", cases["inbox_peek"])
+        self.assertTrue(inbox["pending_reads"])
+        queued = self.vectors["local"][0]
+        self.assertTrue(queued["spool_removed"])
+        self.assertEqual(queued["request"], queued["imported"])
+        send = cases["send_queued"]["spooled"]["data"]
+        self.assertEqual(send["expires"], GENERATOR.NOW + send["ttl"])
+
+    def test_http_limits_hold_and_reset(self):
+        cases = {case["name"]: case for case in self.vectors["hub"]}
+        for name, status in (("not_found", 404), ("request_too_large", 413), ("quota_overloaded", 429), ("storage_unavailable", 503)):
+            self.assertEqual(cases[name]["status"], status)
+        self.assertEqual(cases["quota_overloaded"]["response"]["code"], "overloaded")
+        for name in ("quota_overloaded", "storage_unavailable"):
+            self.assertTrue(cases[name]["response"]["retryable"])
+        self.assertEqual(cases["hop_limit"]["response"]["error"], "thread reached the 6-message limit; send a new message instead")
+        self.assertEqual(cases["hop_5"]["response"]["result"]["hops"], 5)
+        self.assertEqual(cases["result_held"]["response"]["result"]["status"], "pending")
+        self.assertTrue(cases["sync_reset_required"]["response"]["result"]["reset_required"])
+        empty = next(case for case in self.vectors["delivery"] if case["name"] == "empty_detail")
+        self.assertEqual(empty["message"]["detail"], "")
+
+    def test_mcp_framing_errors_recover(self):
+        cases = {case["name"]: case for case in self.vectors["mcp_frames"]}
+        for name in ("parse_error", "invalid_utf8", "oversize_then_ping"):
+            self.assertEqual(cases[name]["responses"][0]["error"]["code"], -32700)
+        self.assertEqual(cases["invalid_request"]["responses"][0]["error"]["code"], -32600)
+        self.assertEqual(cases["oversize_then_ping"]["responses"][1]["result"], {})
+        self.assertEqual(len(cases["notification_then_ping"]["responses"]), 1)
 
 
 if __name__ == "__main__":
