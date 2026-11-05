@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/llcoolkm/rookery/go/platform"
 )
 
 var nodePattern = regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}$`)
@@ -17,6 +19,7 @@ var providerPattern = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
 var uuidPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
 func CanonicalID(id string) error {
+	id = strings.ToLower(id)
 	if uuidPattern.MatchString(id) {
 		return nil
 	}
@@ -45,6 +48,7 @@ func Qualify(actor, node string) (string, error) {
 	}
 	n, local, ok := strings.Cut(actor, "/")
 	p, id, ok2 := strings.Cut(local, ":")
+	id = strings.ToLower(id)
 	if !ok || !ok2 {
 		return "", errors.New("address must be node/provider:UUID")
 	}
@@ -54,20 +58,28 @@ func Qualify(actor, node string) (string, error) {
 	if e := CanonicalID(id); e != nil {
 		return "", e
 	}
-	return actor, nil
+	return n + "/" + p + ":" + id, nil
 }
 
 type Config struct {
-	Node         string   `json:"node"`
-	URL          string   `json:"url"`
-	Token        string   `json:"token"`
-	AllowHTTP    bool     `json:"allow_http_loopback"`
-	BusyDelivery []string `json:"busy_delivery"`
+	CodexExecutable  string   `json:"codex_executable"`
+	Node             string   `json:"node"`
+	URL              string   `json:"url"`
+	Token            string   `json:"token"`
+	AllowHTTP        bool     `json:"allow_http_loopback"`
+	BusyDelivery     []string `json:"busy_delivery"`
+	SessionAllowlist []string `json:"session_allowlist"`
 }
 
 func (c Config) Validate() error {
 	if !nodePattern.MatchString(c.Node) {
 		return errors.New("invalid node or token (minimum 32 non-whitespace characters)")
+	}
+	for _, entry := range c.SessionAllowlist {
+		p, id, ok := strings.Cut(entry, ":")
+		if !ok || (p != "codex" && p != "claude" && p != "agy") || CanonicalID(id) != nil {
+			return errors.New("session allowlist must contain provider:UUID entries")
+		}
 	}
 	_, e := NewHTTPHub(c.URL, c.Token, c.AllowHTTP)
 	return e
@@ -97,6 +109,10 @@ func (c *Client) Request(ctx context.Context, op string, input map[string]any, t
 		if !ok || ttl < 1 || ttl > 86400 {
 			return nil, errors.New("ttl must be an integer between 1 and 86400 seconds")
 		}
+		data["id"] = strings.ToLower(stringArg(data, "id", ""))
+		if op == "reply" {
+			data["message_id"] = strings.ToLower(stringArg(data, "message_id", ""))
+		}
 		if e := CanonicalID(stringArg(data, "id", "")); e != nil {
 			return nil, e
 		}
@@ -123,13 +139,22 @@ func (c *Client) Request(ctx context.Context, op string, input map[string]any, t
 	if e != nil {
 		return nil, errors.New("invalid request fields")
 	}
+	queued := func() (map[string]any, error) {
+		return map[string]any{"status": "queued_local", "request_id": id, "id": data["id"], "detail": "saved locally; helper will upload when connected"}, nil
+	}
 	if e = c.Store.Admit(ctx, Command{ID: id, Op: op, Data: b, Created: seconds()}); e != nil {
+		if errors.Is(e, platform.ErrCommittedNotDurable) {
+			return queued()
+		}
 		return nil, e
 	}
 	deadline := time.Now().Add(timeout)
 	for timeout > 0 && time.Now().Before(deadline) {
 		r, ok, e := c.Store.Result(ctx, id)
 		if e != nil {
+			if ctx.Err() != nil {
+				return queued()
+			}
 			return nil, e
 		}
 		if ok {
@@ -144,11 +169,11 @@ func (c *Client) Request(ctx context.Context, op string, input map[string]any, t
 		}
 		select {
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			return queued()
 		case <-time.After(50 * time.Millisecond):
 		}
 	}
-	return map[string]any{"status": "queued_local", "request_id": id, "id": data["id"], "detail": "saved locally; helper will upload when connected"}, nil
+	return queued()
 }
 func Compact(value map[string]any) map[string]any {
 	out := map[string]any{}
@@ -230,6 +255,11 @@ func (c *Client) Invoke(ctx context.Context, op string, args map[string]any) (an
 		}
 		if limit > 100 {
 			limit = 100
+		}
+		if raw, ok := args["peek"]; ok {
+			if _, valid := raw.(bool); !valid {
+				return nil, errors.New("peek must be a boolean")
+			}
 		}
 		peek, _ := args["peek"].(bool)
 		msgs, e := c.Store.Messages(ctx, actor, 0)

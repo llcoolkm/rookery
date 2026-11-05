@@ -11,6 +11,7 @@ import (
 
 	"github.com/llcoolkm/rookery/go/core"
 	"github.com/llcoolkm/rookery/go/platform"
+	"github.com/llcoolkm/rookery/go/provider"
 )
 
 type pollingRecord struct {
@@ -73,6 +74,9 @@ func UnregisterPolling(ctx context.Context, h platform.Host, root, provider, id 
 	return map[string]any{"unregistered": provider + ":" + id}, nil
 }
 func DiscoverPolling(ctx context.Context, h platform.Host, root string) ([]core.Session, error) {
+	return discoverPolling(ctx, h, root, provider.Config{})
+}
+func discoverPolling(ctx context.Context, h platform.Host, root string, config provider.Config) ([]core.Session, error) {
 	entries, err := h.Files.List(ctx, root)
 	if err != nil {
 		return nil, err
@@ -92,7 +96,7 @@ func DiscoverPolling(ctx context.Context, h platform.Host, root string) ([]core.
 			continue
 		}
 		var record pollingRecord
-		if json.Unmarshal(b, &record) != nil || pollingIdentity(record.Provider, record.ID) != nil || entry.Name != pollingName(record.Provider, record.ID) || !validName(record.Name) || h.Process.Pin(ctx, record.Pin) != nil {
+		if json.Unmarshal(b, &record) != nil || pollingIdentity(record.Provider, record.ID) != nil || entry.Name != pollingName(record.Provider, record.ID) || !validName(record.Name) || !config.Allows(record.Provider, record.ID) || h.Process.Pin(ctx, record.Pin) != nil {
 			continue
 		}
 		result = append(result, core.Session{ProcessRef: &record.Pin, Provider: record.Provider, ID: record.ID, PID: record.Pin.PID, Name: record.Name, Status: "waiting", Delivery: "polling", Admission: "none"})

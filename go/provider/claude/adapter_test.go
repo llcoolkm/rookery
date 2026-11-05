@@ -21,10 +21,12 @@ var testPin = platform.ProcessRef{PID: 42, Principal: "test", Start: "1", BootID
 
 type fakeExec struct {
 	rows   []row
+	calls  int
 	change func()
 }
 
 func (e *fakeExec) Exec(context.Context, platform.Spec) (platform.ExecResult, error) {
+	e.calls++
 	b, _ := json.Marshal(e.rows)
 	if e.change != nil {
 		e.change()
@@ -60,11 +62,15 @@ func (*fakeFile) Write([]byte) (int, error) { return 0, errors.New("read only") 
 func (*fakeFile) Sync() error               { return nil }
 func (*fakeFile) Close() error              { return nil }
 
-type fakeFiles struct{ record string }
+type fakeFiles struct {
+	record string
+	opened []string
+}
 
 func (*fakeFiles) PrivateState(context.Context, string) (string, error) { return "", nil }
 func (*fakeFiles) EnsurePrivate(context.Context, string, bool) error    { return nil }
-func (f *fakeFiles) OpenNoFollow(context.Context, string, string, bool) (platform.File, error) {
+func (f *fakeFiles) OpenNoFollow(_ context.Context, _ string, name string, _ bool) (platform.File, error) {
+	f.opened = append(f.opened, name)
 	return &fakeFile{bytes.NewReader([]byte(f.record))}, nil
 }
 func (*fakeFiles) AtomicWrite(context.Context, string, string, []byte) error { return nil }
@@ -236,5 +242,50 @@ func TestRediscoveryCannotReplaceClaimProcessPin(t *testing.T) {
 	result, _ := adapter.Deliver(context.Background(), session, message())
 	if result.Status != "held" || ipc.calls != 0 {
 		t.Fatal("rediscovery replaced the captured process pin", result)
+	}
+}
+
+type revokingPaths struct {
+	fakePaths
+	issued, revoked int
+}
+
+func (p *revokingPaths) HarnessEndpoint(ctx context.Context, name string, record platform.File, address string, pin platform.ProcessRef) (platform.Endpoint, error) {
+	_, err := p.fakePaths.HarnessEndpoint(ctx, name, record, address, pin)
+	if err != nil {
+		return "", err
+	}
+	p.issued++
+	return platform.Endpoint(strings.Repeat("x", p.issued)), nil
+}
+func (p *revokingPaths) Revoke(platform.Endpoint) { p.revoked++ }
+func TestRediscoveryRevokesOldHandles(t *testing.T) {
+	a, _, _, _, _ := fixture(t, provider.Config{})
+	paths := &revokingPaths{}
+	a.host.Paths = paths
+	for i := 0; i < 10; i++ {
+		if _, err := a.Discover(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if paths.issued != 10 || paths.revoked != 10 {
+		t.Fatal(paths)
+	}
+}
+func TestAllowlistSkipsUnselectedRecordsAndEmptySkipsCLI(t *testing.T) {
+	a, exec, ipc, _, _ := fixture(t, provider.Config{})
+	exec.calls = 0
+	files := a.host.Files.(*fakeFiles)
+	files.opened = nil
+	a.config.SessionAllowlist = []string{}
+	rows, err := a.Discover(context.Background())
+	if err != nil || len(rows) != 0 || exec.calls != 0 || len(files.opened) != 0 || ipc.calls != 0 {
+		t.Fatal("empty allowlist touched provider", err)
+	}
+	a.config.SessionAllowlist = []string{"claude:" + testID}
+	exec.rows = append(exec.rows, row{PID: 99, ID: "00000000-0000-4000-8000-000000000002", Status: "idle"})
+	rows, err = a.Discover(context.Background())
+	if err != nil || len(rows) != 1 || len(files.opened) != 1 || files.opened[0] != "sessions/42.json" {
+		t.Fatal(rows, err, files.opened)
 	}
 }

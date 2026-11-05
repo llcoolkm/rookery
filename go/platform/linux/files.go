@@ -182,6 +182,14 @@ func (f *files) EnsurePrivate(ctx context.Context, path string, directory bool) 
 	return v.Close()
 }
 func (f *files) OpenNoFollow(ctx context.Context, root, name string, create bool) (platform.File, error) {
+	return f.open(ctx, root, name, create, true)
+}
+
+// OpenProviderRecord permits provider-readable records, but never writable-by-others records.
+func (f *files) OpenProviderRecord(ctx context.Context, root, name string) (platform.File, error) {
+	return f.open(ctx, root, name, false, false)
+}
+func (f *files) open(ctx context.Context, root, name string, create, private bool) (platform.File, error) {
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
 	}
@@ -196,9 +204,9 @@ func (f *files) OpenNoFollow(ctx context.Context, root, name string, create bool
 			return nil, errUnsafe
 		}
 	}
-	flags := syscall.O_RDWR | syscall.O_CLOEXEC | syscall.O_NOFOLLOW | syscall.O_NONBLOCK
+	flags := syscall.O_RDONLY | syscall.O_CLOEXEC | syscall.O_NOFOLLOW | syscall.O_NONBLOCK
 	if create {
-		flags |= syscall.O_CREAT
+		flags |= syscall.O_CREAT | syscall.O_RDWR
 	}
 	n, e := syscall.Openat(fd, base, flags, 0600)
 	if e == syscall.ENOENT {
@@ -208,7 +216,7 @@ func (f *files) OpenNoFollow(ctx context.Context, root, name string, create bool
 		return nil, errUnsafe
 	}
 	var st syscall.Stat_t
-	if syscall.Fstat(n, &st) != nil || st.Mode&syscall.S_IFMT != syscall.S_IFREG || !safeStat(&st, true, false) || st.Nlink != 1 {
+	if syscall.Fstat(n, &st) != nil || st.Mode&syscall.S_IFMT != syscall.S_IFREG || !safeStat(&st, private, false) || st.Nlink != 1 {
 		syscall.Close(n)
 		return nil, errUnsafe
 	}
@@ -268,11 +276,13 @@ func (f *files) AtomicWrite(ctx context.Context, root, name string, data []byte)
 	if e != nil {
 		return errors.New("local storage unavailable")
 	}
-	if e = syscall.Renameat(fd, tmp, fd, base); e == nil {
-		e = syscall.Fsync(fd)
-	}
-	if e != nil {
+	if e = syscall.Renameat(fd, tmp, fd, base); e != nil {
 		return errors.New("local storage unavailable")
+	}
+	// Rename committed the record. A directory durability failure must not invite
+	// replay of an operation that is already visible locally.
+	if syscall.Fsync(fd) != nil {
+		return platform.ErrCommittedNotDurable
 	}
 	return nil
 }
@@ -438,7 +448,7 @@ func recordProvenance(record *verifiedFile) error {
 	}
 	defer syscall.Close(pathFD)
 	var original, current syscall.Stat_t
-	if syscall.Fstat(int(record.Fd()), &original) != nil || syscall.Fstat(pathFD, &current) != nil || original.Dev != current.Dev || original.Ino != current.Ino || current.Mode&syscall.S_IFMT != syscall.S_IFREG || !safeStat(&current, true, false) || current.Nlink != 1 {
+	if syscall.Fstat(int(record.Fd()), &original) != nil || syscall.Fstat(pathFD, &current) != nil || original.Dev != current.Dev || original.Ino != current.Ino || current.Mode&syscall.S_IFMT != syscall.S_IFREG || !safeStat(&current, false, false) || current.Nlink != 1 {
 		return errUnsafe
 	}
 	return nil

@@ -54,9 +54,9 @@ func installWith(ctx context.Context, h platform.Host, root string, a arguments,
 	if name == "claude" {
 		argv = append(argv, "-s", "user")
 	}
-	argv = append(argv, "rookery", "--", self)
+	argv = append(argv, "rookery-go", "--", self)
 	argv = append(argv, want...)
-	get := []string{"mcp", "get", "rookery"}
+	get := []string{"mcp", "get", "rookery-go"}
 	if name == "codex" {
 		get = append(get, "--json")
 	}
@@ -65,16 +65,16 @@ func installWith(ctx context.Context, h platform.Host, root string, a arguments,
 		return nil, errors.New("provider configuration unavailable")
 	}
 	actions := []any{}
-	notes := []string{"Tool permission grants are unchanged; allow the rookery tools in the provider's own permission flow if needed."}
+	notes := []string{"Tool permission grants are unchanged; allow the rookery-go tools in the provider's own permission flow if needed."}
 	configured := current.ExitCode == 0
 	var matches any
 	managed := false
 	if configured {
 		matches = installMatches(name, current.Stdout, self, want)
 		if matches == nil {
-			notes = append(notes, "Existing rookery MCP entry is preserved; the provider listing cannot prove exact arguments. Inspect it before replacement.")
+			notes = append(notes, "Existing rookery-go MCP entry is preserved; the provider listing cannot prove exact arguments. Inspect it before replacement.")
 		} else if matches == false {
-			notes = append(notes, "Existing rookery MCP entry differs from this install and is preserved. Replace it explicitly through the provider CLI if intended.")
+			notes = append(notes, "Existing rookery-go MCP entry differs from this install and is preserved. Replace it explicitly through the provider CLI if intended.")
 		}
 	} else if name == "claude" && env.managed() {
 		managed = true
@@ -137,7 +137,7 @@ func installWith(ctx context.Context, h platform.Host, root string, a arguments,
 		if _, err = h.Files.PrivateState(ctx, providerRoot); err != nil {
 			return nil, errors.New("provider configuration unavailable")
 		}
-		lock, err := h.Files.AdvisoryLock(ctx, providerRoot, "rookery-go-install.lock", true)
+		lock, err := h.Files.AdvisoryLock(ctx, root, "provider-install.lock", true)
 		if err != nil {
 			return nil, errors.New("provider settings unavailable")
 		}

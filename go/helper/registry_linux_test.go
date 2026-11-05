@@ -134,3 +134,18 @@ func TestPollingOverridesNativeAndAttachedOverridesPolling(t *testing.T) {
 		t.Fatal(rows)
 	}
 }
+
+func TestRestrictedDiscoveryDefaultsToNoSessions(t *testing.T) {
+	h := host(t)
+	r := NewRegistry(provider.Config{SessionAllowlist: []string{}}, h)
+	r.Providers = map[string]provider.Provider{"codex": fakeProvider{name: "codex", rows: []core.Session{{Provider: "codex", ID: testID}}}}
+	rows, problems := r.Discover(context.Background())
+	if len(rows) != 0 || len(problems) != 0 {
+		t.Fatal(rows, problems)
+	}
+	r.Config.SessionAllowlist = []string{"codex:" + testID}
+	rows, problems = r.Discover(context.Background())
+	if len(rows) != 1 || len(problems) != 0 {
+		t.Fatal(rows, problems)
+	}
+}

@@ -10,11 +10,13 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -267,8 +269,8 @@ func TestPythonGoHelpers(t *testing.T) {
 		if got["recipient"] != goActor || got["kind"] != "reply" || got["body"] != "Python reply" {
 			t.Fatal("Python reply missing in Go helper")
 		}
-		_, e := client.Invoke(ctx, "inbox", map[string]any{})
-		checked(t, e)
+		rows = invokeInbox(t, ctx, client)
+		assertInbox(t, rows, replyID, "Python reply")
 		cycle()
 		invoke(t, ctx, client, "ack", map[string]any{"message_id": replyID})
 		cycle()
@@ -278,9 +280,7 @@ func TestPythonGoHelpers(t *testing.T) {
 		}
 		reverseID := pending(t, python.invoke(t, "send", map[string]any{"to": "alpha", "body": "Python to Go", "kind": "inform"}))
 		cycle()
-		if message(t, ctx, client, reverseID)["body"] != "Python to Go" {
-			t.Fatal("Python send missing in Go inbox")
-		}
+		assertInbox(t, invokeInbox(t, ctx, client), reverseID, "Python to Go")
 	})
 
 	t.Run("lost_response_retains_identity_and_retry_is_idempotent", func(t *testing.T) {
@@ -324,7 +324,7 @@ func TestPythonGoHelpers(t *testing.T) {
 	})
 
 	t.Run("expiry_deadline_and_polling_no_claim", func(t *testing.T) {
-		id := pending(t, invoke(t, ctx, client, "send", map[string]any{"to": "beta", "body": "expiry probe", "ttl": 1}))
+		id := pending(t, invoke(t, ctx, client, "send", map[string]any{"to": "beta", "body": "expiry probe", "ttl": 60}))
 		cycle()
 		betaHub, e := core.NewHTTPHub(url, beta, true)
 		checked(t, e)
@@ -333,7 +333,13 @@ func TestPythonGoHelpers(t *testing.T) {
 		if claim.Delivery != nil {
 			t.Fatal("polling session was claimed for push")
 		}
-		time.Sleep(1200 * time.Millisecond)
+		// Move only this fixture's persisted deadline into the past. This makes
+		// expiry independent of machine speed and scheduling around a short TTL.
+		expire := exec.CommandContext(ctx, "uv", "run", "--frozen", "--extra", "hub", "python", "-c", "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.execute(\"UPDATE messages SET expires=0,data=json_set(data,'$.expires',0) WHERE id=?\",(sys.argv[2],)); c.commit()", filepath.Join(root, "hub.sqlite3"), id)
+		expire.Dir, expire.Env = project, env
+		if expire.Run() != nil {
+			t.Fatal("cannot advance isolated expiry fixture")
+		}
 		cycle()
 		status := message(t, ctx, client, id)
 		if status["status"] != "expired" {
@@ -412,4 +418,201 @@ func TestPythonGoHelpers(t *testing.T) {
 		checked(t, helper.Publish(ctx))
 	})
 
+	t.Run("binary_daemon_and_mcp_cross_delivery", func(t *testing.T) {
+		testBinaryPeers(t, ctx, project, root, env, url, alpha, python)
+	})
+
+}
+
+func invokeInbox(t *testing.T, ctx context.Context, client *core.Client) []any {
+	t.Helper()
+	value, err := client.Invoke(ctx, "inbox", map[string]any{})
+	checked(t, err)
+	raw, err := json.Marshal(value)
+	checked(t, err)
+	var rows []any
+	checked(t, json.Unmarshal(raw, &rows))
+	return rows
+}
+func assertInbox(t *testing.T, rows []any, id, body string) {
+	t.Helper()
+	for _, row := range rows {
+		m := object(t, row)
+		if m["id"] == id && m["body"] == body {
+			return
+		}
+	}
+	t.Fatal("expected cross-delivered message missing from inbox")
+}
+
+// A copy of this native test executable serves only synthetic `claude agents`
+// rows. The daemon's PATH contains no real provider executables.
+func TestMain(m *testing.M) {
+	if filepath.Base(os.Args[0]) == "claude" && os.Getenv("ROOKERY_TEST_PROVIDER") == "synthetic" {
+		if len(os.Args) != 3 || os.Args[1] != "agents" || os.Args[2] != "--json" {
+			os.Exit(2)
+		}
+		pid, err := strconv.Atoi(os.Getenv("ROOKERY_TEST_PROVIDER_PID"))
+		if err != nil || pid <= 0 {
+			os.Exit(2)
+		}
+		_ = json.NewEncoder(os.Stdout).Encode([]any{map[string]any{"pid": pid, "sessionId": goSession, "name": "synthetic binary peer", "status": "idle"}})
+		os.Exit(0)
+	}
+	os.Exit(m.Run())
+}
+func testBinaryPeers(t *testing.T, ctx context.Context, project, root string, env []string, url, token string, python *peer) {
+	t.Helper()
+	bin := filepath.Join(root, "bin")
+	privateDir(t, bin)
+	executable := filepath.Join(bin, "rookery")
+	build := exec.CommandContext(ctx, "go", "build", "-o", executable, "./cmd/rookery")
+	build.Dir = filepath.Join(project, "go")
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("cannot build isolated helper binary: %s", output)
+	}
+	self, err := os.Executable()
+	checked(t, err)
+	raw, err := os.ReadFile(self)
+	checked(t, err)
+	checked(t, os.WriteFile(filepath.Join(bin, "claude"), raw, 0700))
+	childEnv := []string{}
+	for _, entry := range env {
+		if !strings.HasPrefix(entry, "PATH=") {
+			childEnv = append(childEnv, entry)
+		}
+	}
+	childEnv = append(childEnv, "PATH="+bin, "ROOKERY_TEST_PROVIDER=synthetic", fmt.Sprintf("ROOKERY_TEST_PROVIDER_PID=%d", os.Getpid()))
+	state := filepath.Join(root, "binary-helper")
+	tokenFile := filepath.Join(root, "binary-token")
+	checked(t, os.WriteFile(tokenFile, []byte(token), 0600))
+	run := func(args ...string) {
+		t.Helper()
+		cmd := exec.CommandContext(ctx, executable, append([]string{"--state-dir", state}, args...)...)
+		cmd.Env = childEnv
+		if output, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("isolated binary operation failed: %s", output)
+		}
+	}
+	run("configure", "--node", "alpha", "--url", url, "--token-file", tokenFile, "--allow-http-loopback", "--session-allowlist", "claude:"+goSession)
+	claudeRoot := filepath.Join(root, "claude")
+	privateDir(t, filepath.Join(claudeRoot, "sessions"))
+	address := filepath.Join(root, "fake.sock")
+	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: address, Net: "unix"})
+	checked(t, err)
+	defer listener.Close()
+	checked(t, os.Chmod(address, 0600))
+	record, err := json.Marshal(map[string]any{"sessionId": goSession, "messagingSocketPath": address})
+	checked(t, err)
+	checked(t, os.WriteFile(filepath.Join(claudeRoot, "sessions", fmt.Sprintf("%d.json", os.Getpid())), record, 0600))
+	received := make(chan []byte, 8)
+	go func() {
+		for {
+			conn, err := listener.AcceptUnix()
+			if err != nil {
+				return
+			}
+			_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+			frame, _ := bufio.NewReader(conn).ReadBytes('\n')
+			_ = conn.Close()
+			select {
+			case received <- frame:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	daemon := exec.CommandContext(ctx, executable, "--state-dir", state, "daemon")
+	daemon.Env = childEnv
+	checked(t, daemon.Start())
+	defer func() { _ = daemon.Process.Kill(); _ = daemon.Wait() }()
+	mcp := exec.CommandContext(ctx, executable, "--state-dir", state, "mcp", "--session", "claude:"+goSession)
+	mcp.Env = childEnv
+	input, err := mcp.StdinPipe()
+	checked(t, err)
+	output, err := mcp.StdoutPipe()
+	checked(t, err)
+	checked(t, mcp.Start())
+	defer func() { _ = input.Close(); _ = mcp.Process.Kill(); _ = mcp.Wait() }()
+	decoder := json.NewDecoder(output)
+	sequence := 0
+	request := func(method string, params map[string]any) map[string]any {
+		t.Helper()
+		sequence++
+		checked(t, json.NewEncoder(input).Encode(map[string]any{"jsonrpc": "2.0", "id": sequence, "method": method, "params": params}))
+		var response map[string]any
+		checked(t, decoder.Decode(&response))
+		if response["error"] != nil || response["id"] != float64(sequence) {
+			t.Fatal("isolated MCP binary returned protocol error")
+		}
+		return object(t, response["result"])
+	}
+	request("initialize", map[string]any{"protocolVersion": core.MCPProtocolVersion})
+	call := func(tool string, args map[string]any) any {
+		t.Helper()
+		result := request("tools/call", map[string]any{"name": tool, "arguments": args})
+		if result["isError"] == true {
+			t.Fatal("isolated MCP tool failed")
+		}
+		content, ok := result["content"].([]any)
+		if !ok || len(content) != 1 {
+			t.Fatal("isolated MCP tool content missing")
+		}
+		text, ok := object(t, content[0])["text"].(string)
+		if !ok {
+			t.Fatal("isolated MCP text missing")
+		}
+		var value any
+		checked(t, json.Unmarshal([]byte(text), &value))
+		return value
+	}
+	id := pending(t, call("send", map[string]any{"to": "beta", "body": "binary Go to Python"}))
+	// Only Python is stepped manually; Go must process commands and sync through
+	// the running daemon executable.
+	deadline := time.Now().Add(15 * time.Second)
+	found := false
+	for time.Now().Before(deadline) {
+		python.call(t, "cycle", nil)
+		rows := python.invoke(t, "inbox", map[string]any{"peek": true}).([]any)
+		for _, row := range rows {
+			m := object(t, row)
+			if m["id"] == id && m["body"] == "binary Go to Python" {
+				found = true
+			}
+		}
+		if found {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if !found {
+		t.Fatal("binary daemon send did not reach Python inbox")
+	}
+	reverseID := pending(t, python.invoke(t, "send", map[string]any{"to": "alpha", "body": "Python to binary Go"}))
+	python.call(t, "cycle", nil)
+	// Require both the provider socket frame and the MCP inbox result.
+	nativeFound := false
+	deadline = time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) && !nativeFound {
+		select {
+		case frame := <-received:
+			var value map[string]any
+			if json.Unmarshal(frame, &value) == nil && value["session_id"] == goSession {
+				message := object(t, value["message"])
+				content, _ := message["content"].(string)
+				nativeFound = strings.Contains(content, reverseID) && strings.Contains(content, "Python to binary Go")
+			}
+		case <-time.After(50 * time.Millisecond):
+		case <-ctx.Done():
+			t.Fatal("binary native delivery timed out")
+		}
+	}
+	if !nativeFound {
+		t.Fatal("binary daemon did not deliver to synthetic provider socket")
+	}
+	rows, ok := call("inbox", map[string]any{"peek": true}).([]any)
+	if !ok {
+		t.Fatal("binary MCP inbox did not return rows")
+	}
+	assertInbox(t, rows, reverseID, "Python to binary Go")
 }

@@ -13,6 +13,7 @@ import (
 	"github.com/llcoolkm/rookery/go/provider"
 	"io"
 	"io/fs"
+	"log"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -31,7 +32,7 @@ type arguments struct {
 func parse(args []string) (arguments, error) {
 	a := arguments{options: map[string]string{}}
 	bools := map[string]bool{"once": true, "peek": true, "allow-http-loopback": true, "apply": true, "accept-inbound": true, "dry-run": true, "detach": true, "receipt": true}
-	values := map[string]bool{"state-dir": true, "as": true, "node": true, "url": true, "token-file": true, "provider": true, "session": true, "to": true, "body": true, "kind": true, "ttl": true, "id": true, "limit": true, "alias": true, "pid": true, "name": true, "backend": true, "executable": true, "user": true, "path": true, "timeout": true}
+	values := map[string]bool{"state-dir": true, "as": true, "node": true, "url": true, "token-file": true, "provider": true, "session": true, "to": true, "body": true, "kind": true, "ttl": true, "id": true, "limit": true, "alias": true, "pid": true, "name": true, "backend": true, "executable": true, "user": true, "path": true, "timeout": true, "session-allowlist": true}
 	for i := 0; i < len(args); i++ {
 		s := args[i]
 		if strings.HasPrefix(s, "--") {
@@ -140,8 +141,27 @@ func runPlatform(ctx context.Context, args []string) (any, error) {
 				return nil, errors.New("use a fresh state directory to change hub or node")
 			}
 			c.BusyDelivery = old.BusyDelivery
+			c.SessionAllowlist = old.SessionAllowlist
+			c.CodexExecutable = old.CodexExecutable
 		} else if !errors.Is(e, fs.ErrNotExist) {
 			return nil, errors.New("invalid private configuration")
+		}
+		if executable, exists := a.options["executable"]; exists {
+			if !filepath.IsAbs(executable) {
+				return nil, errors.New("--executable must be an absolute native Codex binary path")
+			}
+			c.CodexExecutable = executable
+		}
+		if raw, exists := a.options["session-allowlist"]; exists {
+			c.SessionAllowlist = []string{}
+			if raw != "" {
+				for _, target := range strings.Split(raw, ",") {
+					c.SessionAllowlist = append(c.SessionAllowlist, strings.ToLower(strings.TrimSpace(target)))
+				}
+			}
+		}
+		if e = c.Validate(); e != nil {
+			return nil, e
 		}
 		if e = writeJSON(ctx, h, root, "config.json", c); e != nil {
 			return nil, errors.New("configuration write failed")
@@ -189,7 +209,11 @@ func runPlatform(ctx context.Context, args []string) (any, error) {
 		}
 		return map[string]any{"busy_delivery": config.BusyDelivery, "restart_helper": true, "detail": "takes effect, on or off, only after the helper restarts; until then the old policy applies"}, nil
 	}
-	registry := helper.NewRegistry(provider.Config{BusyDelivery: config.BusyDelivery}, h)
+	allowlist := config.SessionAllowlist
+	if a.command == "daemon" && allowlist == nil {
+		allowlist = []string{}
+	}
+	registry := helper.NewRegistry(provider.Config{BusyDelivery: config.BusyDelivery, SessionAllowlist: allowlist, CodexExecutable: config.CodexExecutable}, h)
 	actor := a.options["as"]
 	if actor == "" {
 		actor = os.Getenv("ROOKERY_SESSION")
@@ -204,6 +228,9 @@ func runPlatform(ctx context.Context, args []string) (any, error) {
 		}
 	}
 	if a.command == "daemon" {
+		if len(allowlist) == 0 {
+			log.Print("session allowlist required during coexistence; empty allowlist discovers no sessions")
+		}
 		hub, e := core.NewHTTPHub(config.URL, config.Token, config.AllowHTTP)
 		if e != nil {
 			return nil, e

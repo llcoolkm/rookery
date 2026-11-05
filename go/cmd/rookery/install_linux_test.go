@@ -27,6 +27,11 @@ type installExec struct {
 
 func (e *installExec) Exec(_ context.Context, s platform.Spec) (platform.ExecResult, error) {
 	e.calls = append(e.calls, append([]string(nil), s.Args...))
+	for _, arg := range s.Args {
+		if arg == "rookery" {
+			return platform.ExecResult{}, errors.New("production MCP entry touched")
+		}
+	}
 	if s.Args[1] == "get" {
 		code := 1
 		if e.configured {
@@ -98,7 +103,7 @@ func TestInstallerPlansThenUsesOnlyProviderCLI(t *testing.T) {
 			if name == "claude" {
 				expected = append(expected, "-s", "user")
 			}
-			expected = append(expected, "rookery", "--", "/synthetic/rookery", "--state-dir", root, "mcp", "--provider", name)
+			expected = append(expected, "rookery-go", "--", "/synthetic/rookery", "--state-dir", root, "mcp", "--provider", name)
 			if !equalStrings(exec.calls[2], expected) {
 				t.Fatal(exec.calls[2])
 			}

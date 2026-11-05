@@ -8,7 +8,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"github.com/llcoolkm/rookery/go/platform"
-	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -72,16 +71,25 @@ func (p *paths) StateDir() (string, error) {
 	return filepath.Join(root, "rookery-go"), nil
 }
 func (p *paths) issue(e endpoint) (platform.Endpoint, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.issueLocked(e)
+}
+func (p *paths) issueLocked(e endpoint) (platform.Endpoint, error) {
 	var b [32]byte
 	if _, err := rand.Read(b[:]); err != nil {
 		return "", errors.New("endpoint unavailable")
 	}
 	handle := platform.Endpoint(hex.EncodeToString(b[:]))
-	p.mu.Lock()
 	p.endpoints[handle] = e
-	p.mu.Unlock()
 	return handle, nil
 }
+func (p *paths) Revoke(h platform.Endpoint) {
+	p.mu.Lock()
+	delete(p.endpoints, h)
+	p.mu.Unlock()
+}
+
 func (p *paths) get(h platform.Endpoint) (endpoint, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -146,7 +154,7 @@ func (p *paths) HarnessEndpoint(ctx context.Context, provider string, record pla
 		return "", e
 	}
 	var st syscall.Stat_t
-	if syscall.Fstat(int(real.Fd()), &st) != nil || !safeStat(&st, true, false) || st.Nlink != 1 {
+	if syscall.Fstat(int(real.Fd()), &st) != nil || !safeStat(&st, false, false) || st.Nlink != 1 {
 		return "", errUnsafe
 	}
 	if e = p.process.Pin(ctx, server); e != nil {
@@ -167,7 +175,7 @@ func (p *paths) Executable(name string) (string, error) { return ResolveExecutab
 
 // ControlEndpoint grants a capability for the platform's fixed Codex control
 // socket. Unlike record-based HarnessEndpoint it accepts no caller path. The
-// resolver authenticates and pins its server now; Dial must match that identity.
+// first Dial authenticates and pins its server; later Dials must match it.
 func (p *paths) ControlEndpoint(ctx context.Context, provider string) (platform.Endpoint, error) {
 	if provider != "codex" {
 		return "", errors.New("provider has no fixed control endpoint")
@@ -180,23 +188,18 @@ func (p *paths) ControlEndpoint(ctx context.Context, provider string) (platform.
 	if e = socketSafe(path); e != nil {
 		return "", e
 	}
-	dialer := net.Dialer{}
-	raw, e := dialer.DialContext(ctx, "unix", path)
-	if e != nil {
-		return "", errors.New("local endpoint unavailable")
+	// Reuse a live pinned capability. Authentication belongs to the actual
+	// protocol connection, avoiding a throwaway raw connection to the server.
+	p.mu.Lock()
+	for handle, ep := range p.endpoints {
+		if ep.path == path && !ep.helper {
+			if ep.expected == nil || p.process.Pin(ctx, *ep.expected) == nil {
+				p.mu.Unlock()
+				return handle, nil
+			}
+			delete(p.endpoints, handle)
+		}
 	}
-	facility := &ipc{paths: p}
-	conn, e := facility.authenticate(ctx, raw.(*net.UnixConn), nil)
-	if e != nil {
-		return "", e
-	}
-	defer conn.Close()
-	ref, e := conn.Peer()
-	if e != nil {
-		return "", e
-	}
-	if e = socketSafe(path); e != nil {
-		return "", e
-	}
-	return p.issue(endpoint{path: path, expected: &ref})
+	defer p.mu.Unlock()
+	return p.issueLocked(endpoint{path: path})
 }

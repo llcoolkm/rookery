@@ -72,7 +72,11 @@ func TestCodexMetadataIdentity(t *testing.T) {
 	if err != nil || actor != "codex:"+id {
 		t.Fatal("valid metadata refused")
 	}
-	bad := []map[string]any{{}, {"_meta": nil}, {"_meta": map[string]any{"threadId": "not-an-id"}}, {"_meta": map[string]any{"threadId": strings.ToUpper("00000000-0000-4aaa-8aaa-000000000001")}}, {"_meta": map[string]any{"threadId": id, "sessionId": "other"}}, {"_meta": map[string]any{"threadId": id, "x-codex-turn-metadata": map[string]any{"thread_id": "other"}}}}
+	upper := "00000000-0000-4AAA-8AAA-000000000001"
+	if actor, e := CodexMetadataIdentity(map[string]any{"_meta": map[string]any{"threadId": upper}}); e != nil || actor != "codex:"+strings.ToLower(upper) {
+		t.Fatal("uppercase UUID not normalized")
+	}
+	bad := []map[string]any{{}, {"_meta": nil}, {"_meta": map[string]any{"threadId": "not-an-id"}}, {"_meta": map[string]any{"threadId": id, "sessionId": "other"}}, {"_meta": map[string]any{"threadId": id, "x-codex-turn-metadata": map[string]any{"thread_id": "other"}}}}
 	for _, params := range bad {
 		_, err := CodexMetadataIdentity(params)
 		var invalid InvalidParams

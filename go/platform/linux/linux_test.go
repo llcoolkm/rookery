@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -430,5 +431,122 @@ func TestHarnessRecordProvenanceRevalidatedAfterOpen(t *testing.T) {
 	}
 	if _, e = host.Paths.HarnessEndpoint(ctx, "claude", record, socket, ref); e == nil {
 		t.Fatal("accepted moved and replaced provenance record")
+	}
+}
+
+func TestReadOnlyProviderRecords(t *testing.T) {
+	host, root := testHost(t)
+	path := filepath.Join(root, "record.json")
+	if err := os.WriteFile(path, []byte("{}"), 0444); err != nil {
+		t.Fatal(err)
+	}
+	files := host.Files.(*files)
+	record, err := files.OpenProviderRecord(context.Background(), root, "record.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer record.Close()
+	if _, err = record.Write([]byte("x")); err == nil {
+		t.Fatal("provider record opened writable")
+	}
+	if err = os.Chmod(path, 0664); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = files.OpenProviderRecord(context.Background(), root, "record.json"); err == nil {
+		t.Fatal("accepted group-writable record")
+	}
+	if err = os.Chmod(path, 0400); err != nil {
+		t.Fatal(err)
+	}
+	token, err := files.OpenNoFollow(context.Background(), root, "record.json", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer token.Close()
+	if _, err = token.Write([]byte("x")); err == nil {
+		t.Fatal("private token opened writable")
+	}
+}
+func TestResolveCodexNativeNpmPackage(t *testing.T) {
+	target := map[string]string{"amd64": "x86_64-unknown-linux-musl", "arm64": "aarch64-unknown-linux-musl"}[runtime.GOARCH]
+	if target == "" {
+		t.Skip("unsupported npm architecture")
+	}
+	root := t.TempDir()
+	pkg := filepath.Join(root, "node_modules", "@openai", "codex")
+	bin := filepath.Join(root, "bin")
+	os.MkdirAll(filepath.Join(pkg, "bin"), 0700)
+	os.MkdirAll(bin, 0700)
+	shim := filepath.Join(pkg, "bin", "codex.js")
+	if err := os.WriteFile(shim, []byte("#!/usr/bin/env node\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(shim, filepath.Join(bin, "codex")); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin)
+	if _, err := ResolveExecutable("codex"); err == nil {
+		t.Fatal("accepted npm shim without native image")
+	}
+	native := filepath.Join(pkg, "vendor", target, "codex", "codex")
+	os.MkdirAll(filepath.Dir(native), 0700)
+	source, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Symlink(source, native); err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := ResolveExecutable("codex")
+	if err != nil || resolved != native {
+		t.Fatal(resolved, err)
+	}
+}
+func TestControlHandlesCachedAndRevoked(t *testing.T) {
+	host, root := testHost(t)
+	t.Setenv("CODEX_HOME", root)
+	dir := filepath.Join(root, "app-server-control")
+	os.Mkdir(dir, 0700)
+	socket := filepath.Join(dir, "app-server-control.sock")
+	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: socket, Net: "unix"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	os.Chmod(socket, 0600)
+	paths := host.Paths.(*paths)
+	first, err := paths.ControlEndpoint(context.Background(), "codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 20; i++ {
+		conn, err := host.IPC.Dial(context.Background(), first)
+		if err != nil {
+			t.Fatal(err)
+		}
+		conn.Close()
+		// Drain the actual connection; endpoint resolution must not create extras.
+		listener.SetDeadline(time.Now().Add(time.Second))
+		server, err := listener.AcceptUnix()
+		if err != nil {
+			t.Fatal(err)
+		}
+		server.Close()
+		next, err := paths.ControlEndpoint(context.Background(), "codex")
+		if err != nil || next != first {
+			t.Fatal("control handle not cached", err)
+		}
+	}
+	if len(paths.endpoints) != 1 {
+		t.Fatal("endpoint capability leak")
+	}
+	listener.SetDeadline(time.Now().Add(time.Millisecond))
+	if extra, err := listener.AcceptUnix(); err == nil {
+		extra.Close()
+		t.Fatal("raw probe connection created")
+	}
+	paths.Revoke(first)
+	if _, err = paths.get(first); err == nil || len(paths.endpoints) != 0 {
+		t.Fatal("capability revocation failed")
 	}
 }

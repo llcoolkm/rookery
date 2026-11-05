@@ -588,15 +588,17 @@ func CodexMetadataIdentity(params map[string]any) (string, error) {
 		return "", InvalidParams(CodexIdentityError)
 	}
 	id, ok := meta["threadId"].(string)
+	id = strings.ToLower(id)
 	if !ok || !canonicalIdentityID(id) {
 		return "", InvalidParams(CodexIdentityError)
 	}
-	if other, exists := meta["sessionId"]; exists && other != id {
+	matchesID := func(other any) bool { value, ok := other.(string); return ok && strings.ToLower(value) == id }
+	if other, exists := meta["sessionId"]; exists && !matchesID(other) {
 		return "", InvalidParams(CodexIdentityError)
 	}
 	if turn, ok := meta["x-codex-turn-metadata"].(map[string]any); ok {
 		for _, key := range []string{"thread_id", "session_id"} {
-			if other, exists := turn[key]; exists && other != id {
+			if other, exists := turn[key]; exists && !matchesID(other) {
 				return "", InvalidParams(CodexIdentityError)
 			}
 		}

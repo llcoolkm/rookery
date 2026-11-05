@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"sync"
 	"testing"
 	"time"
 
@@ -272,5 +273,101 @@ func TestBootstrapPinsCursorAndCommitsOnlyAfterFinalPage(t *testing.T) {
 				t.Fatal("first page was not persisted")
 			}
 		})
+	}
+}
+
+func TestHelperRemovesVanishedSession(t *testing.T) {
+	h, claims := deliveryFixture(t)
+	h.Native.Discover = func(context.Context) ([]core.Session, map[string]string) { return nil, nil }
+	h.Native.Submit = func(context.Context, core.Session, core.Message) (core.DeliveryResult, error) {
+		t.Fatal("submitted vanished session")
+		return core.DeliveryResult{}, nil
+	}
+	if err := h.Deliver(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(h.Sessions) != 0 {
+		t.Fatal("vanished session retained")
+	}
+	if err := h.Deliver(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if *claims != 1 {
+		t.Fatal("reclaimed vanished session")
+	}
+}
+
+func TestHelperRestartWithInflightClaim(t *testing.T) {
+	h, claims := deliveryFixture(t)
+	ctx := context.Background()
+	if err := h.Store.StartAttempt(ctx, messageID, claimID); err != nil {
+		t.Fatal(err)
+	}
+	restartedStore, err := core.NewLocalStore(ctx, h.Store.Files, h.Store.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restarted := &core.Helper{Store: restartedStore, Node: h.Node, Hub: h.Hub, Native: h.Native, Sessions: h.Sessions}
+	if err := restarted.Store.RecoverAttempts(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := restarted.Report(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := restarted.Deliver(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if *claims != 0 {
+		t.Fatal("restart reclaimed in-flight delivery")
+	}
+}
+
+func TestHelperBackgroundLongPollDoesNotBlockRequestsOrRelist(t *testing.T) {
+	s := newStore(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 750*time.Millisecond)
+	defer cancel()
+	var mu sync.Mutex
+	lists, requests, syncs := 0, 0, 0
+	client := core.Client{Store: s}
+	if _, err := client.Request(ctx, "ack", map[string]any{"message_id": messageID}, 0); err != nil {
+		t.Fatal(err)
+	}
+	h := core.Helper{Store: s, Node: "alpha"}
+	h.Hub = helperHub{call: func(ctx context.Context, r core.RPCRequest) (json.RawMessage, error) {
+		switch r.Op {
+		case "sync":
+			var data map[string]any
+			if json.Unmarshal(r.Data, &data) != nil || data["wait"] != float64(10) {
+				t.Error("daemon sync is not a ten-second long poll")
+			}
+			mu.Lock()
+			syncs++
+			mu.Unlock()
+			<-ctx.Done()
+			return nil, ctx.Err()
+		case "list":
+			mu.Lock()
+			lists++
+			mu.Unlock()
+			return json.RawMessage(`{"sessions":[]}`), nil
+		case "ack":
+			mu.Lock()
+			requests++
+			mu.Unlock()
+			return json.RawMessage(`{}`), nil
+		case "publish":
+			return json.RawMessage(`{}`), nil
+		default:
+			t.Error("unexpected hub operation", r.Op)
+			return nil, nil
+		}
+	}}
+	if err := h.Run(ctx, false); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if lists != 1 || requests != 1 || syncs != 1 {
+		t.Fatal("idle helper relisted or long poll blocked command upload", lists, requests, syncs)
 	}
 }

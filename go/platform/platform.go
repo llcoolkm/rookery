@@ -6,6 +6,7 @@ package platform
 
 import (
 	"context"
+	"errors"
 	"io"
 	"time"
 )
@@ -62,8 +63,8 @@ type Process interface {
 
 // Spec describes direct native execution. Path is an absolute platform-validated
 // executable path; no shell or fallback. Windows refuses .cmd/.bat regardless of
-// case, shell interpreters and shell/PATHEXT resolution. Args contain public
-// options only: peer text never enters Windows argv (also limited to 32767
+// case, shell interpreters and shell/PATHEXT resolution. Windows args contain
+// public options only: peer text never enters Windows argv (also limited to 32767
 // characters); use Stdin or a verified private file. Timeout/MaxOutput are positive.
 type Spec struct {
 	Path      string
@@ -101,6 +102,10 @@ type ExecResult struct {
 type Executor interface {
 	Exec(context.Context, Spec) (ExecResult, error)
 }
+
+// ErrCommittedNotDurable means replacement is visible, but its directory fsync
+// failed. Admission may report queued_local; delivery claims must fail closed.
+var ErrCommittedNotDurable = errors.New("local record committed but durability unconfirmed")
 
 // File is an already verified regular file; Sync persists its contents.
 type File interface {

@@ -23,9 +23,10 @@ const testID = "00000000-0000-4000-8000-000000000001"
 var testPin = platform.ProcessRef{PID: 42, Principal: "test", Start: "1", BootID: "test"}
 
 type fakeConn struct {
-	buffer  bytes.Buffer
-	state   string
-	methods *[]string
+	buffer    bytes.Buffer
+	state     string
+	methods   *[]string
+	deadlines *[]time.Time
 }
 
 func (c *fakeConn) Read(b []byte) (int, error) { return c.buffer.Read(b) }
@@ -89,19 +90,25 @@ func (c *fakeConn) enqueue(p []byte) {
 	}
 	c.buffer.Write(p)
 }
-func (*fakeConn) Close() error                       { return nil }
-func (*fakeConn) SetDeadline(time.Time) error        { return nil }
+func (*fakeConn) Close() error { return nil }
+func (c *fakeConn) SetDeadline(at time.Time) error {
+	if c.deadlines != nil {
+		*c.deadlines = append(*c.deadlines, at)
+	}
+	return nil
+}
 func (*fakeConn) SetReadDeadline(time.Time) error    { return nil }
 func (*fakeConn) SetWriteDeadline(time.Time) error   { return nil }
 func (*fakeConn) Peer() (platform.ProcessRef, error) { return testPin, nil }
 
 type fakeIPC struct {
-	state   string
-	methods []string
+	state     string
+	methods   []string
+	deadlines []time.Time
 }
 
 func (f *fakeIPC) Dial(context.Context, platform.Endpoint) (platform.Connection, error) {
-	return &fakeConn{state: f.state, methods: &f.methods}, nil
+	return &fakeConn{state: f.state, methods: &f.methods, deadlines: &f.deadlines}, nil
 }
 func (*fakeIPC) Listen(context.Context, platform.Endpoint) (platform.Listener, error) {
 	return nil, errors.New("unsupported")
@@ -125,12 +132,14 @@ func (*fakeProcess) CommandLine(context.Context, platform.ProcessRef) ([]string,
 }
 
 type fakeExec struct {
-	help  string
-	state platform.ExecState
-	code  int
-	specs []platform.Spec
+	linuxArgv bool
+	help      string
+	state     platform.ExecState
+	code      int
+	specs     []platform.Spec
 }
 
+func (e *fakeExec) LinuxMessageArgv() bool { return e.linuxArgv }
 func (e *fakeExec) Exec(_ context.Context, s platform.Spec) (platform.ExecResult, error) {
 	e.specs = append(e.specs, s)
 	if len(s.Args) > 1 && s.Args[1] == "--help" {
@@ -262,5 +271,56 @@ func TestRediscoveryCannotReplaceClaimProcessPin(t *testing.T) {
 	encoded, err := json.Marshal(session)
 	if err != nil || bytes.Contains(encoded, []byte("BootID")) || bytes.Contains(encoded, []byte("ProcessRef")) {
 		t.Fatal("private process identity reached session wire")
+	}
+}
+
+func TestLinuxArgvFallbackAndMissingRoute(t *testing.T) {
+	a, _, exec, _, session := fixture(t)
+	exec.help = "--message TEXT"
+	exec.linuxArgv = true
+	result, _ := a.Deliver(context.Background(), session, message())
+	if result.Status != "submitted" || len(exec.specs) != 2 {
+		t.Fatal(result, exec.specs)
+	}
+	queued := exec.specs[1]
+	if len(queued.Stdin) != 0 || queued.Args[3] != "--message" || !strings.Contains(queued.Args[4], "sensitive") {
+		t.Fatal("Linux fallback lost argv message")
+	}
+	a, _, exec, _, session = fixture(t)
+	exec.linuxArgv = true
+	exec.help = "--other"
+	result, _ = a.Deliver(context.Background(), session, message())
+	if result.Status != "held" || len(exec.specs) != 1 {
+		t.Fatal(result)
+	}
+}
+func TestEmptyAllowlistDoesNotConnect(t *testing.T) {
+	a, ipc, _, _, _ := fixture(t)
+	a.config.SessionAllowlist = []string{}
+	ipc.methods = nil
+	rows, err := a.Discover(context.Background())
+	if err != nil || len(rows) != 0 || len(ipc.methods) != 0 {
+		t.Fatal(rows, err, ipc.methods)
+	}
+}
+
+func TestDeadlinesResetForEveryCall(t *testing.T) {
+	a, ipc, _, _, _ := fixture(t)
+	// Handshake deadline, initialize, loaded/list and thread/read each refresh it.
+	if len(ipc.deadlines) != 4 {
+		t.Fatal("per-call deadline missing", len(ipc.deadlines))
+	}
+	before := len(ipc.deadlines)
+	p, err := a.open(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.conn.Close()
+	var reply map[string]any
+	if err = p.call("thread/read", map[string]any{"threadId": testID}, &reply); err != nil {
+		t.Fatal(err)
+	}
+	if len(ipc.deadlines) != before+3 {
+		t.Fatal("call did not refresh deadline")
 	}
 }

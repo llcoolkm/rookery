@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"github.com/llcoolkm/rookery/go/core"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -60,6 +61,17 @@ func TestCLIIsolatedPollingAndConfiguration(t *testing.T) {
 	}
 	run("configure", "--node", "alpha", "--url", server.URL, "--token-file", token, "--allow-http-loopback")
 	run("register-polling", "codex:00000000-0000-4000-8000-000000000001", "--pid", strconv.Itoa(os.Getpid()))
+	run("daemon", "--once")
+	var savedConfig core.Config
+	raw, err := os.ReadFile(filepath.Join(state, "config.json"))
+	if err != nil || json.Unmarshal(raw, &savedConfig) != nil || len(savedConfig.SessionAllowlist) != 0 {
+		t.Fatal("unexpected initial allowlist", err)
+	}
+	run("configure", "--node", "alpha", "--url", server.URL, "--token-file", token, "--allow-http-loopback", "--session-allowlist", "codex:00000000-0000-4000-8000-000000000001")
+	raw, err = os.ReadFile(filepath.Join(state, "config.json"))
+	if err != nil || json.Unmarshal(raw, &savedConfig) != nil || len(savedConfig.SessionAllowlist) != 1 {
+		t.Fatal("allowlist was not persisted", err)
+	}
 	run("daemon", "--once")
 	v := run("health").(map[string]any)
 	if v["running"] != false {

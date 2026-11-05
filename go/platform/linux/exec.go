@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -17,6 +18,10 @@ import (
 )
 
 type executor struct{}
+
+// LinuxMessageArgv retains the Python helper's documented Linux exposure.
+func (executor) LinuxMessageArgv() bool { return true }
+
 type output struct {
 	mu             sync.Mutex
 	left           int64
@@ -59,11 +64,53 @@ func ResolveExecutable(name string) (string, error) {
 	if e != nil {
 		return "", errUnsafe
 	}
-	info, e := os.Stat(path)
-	if e != nil || !info.Mode().IsRegular() || info.Mode()&0111 == 0 {
-		return "", errors.New("native executable unavailable")
+	if nativeELF(path) {
+		return path, nil
 	}
-	return path, nil
+	// npm's codex launcher is JavaScript. Resolve only the package's native
+	// vendor image; never execute the shim or invoke its interpreter.
+	if name == "codex" {
+		real, err := filepath.EvalSymlinks(path)
+		if err == nil {
+			pkg := filepath.Dir(filepath.Dir(real))
+			target := ""
+			switch runtime.GOARCH {
+			case "amd64":
+				target = "x86_64-unknown-linux-musl"
+			case "arm64":
+				target = "aarch64-unknown-linux-musl"
+			}
+			if target != "" {
+				arch := map[string]string{"amd64": "x64", "arm64": "arm64"}[runtime.GOARCH]
+				for _, vendor := range []string{
+					filepath.Join(pkg, "vendor"),
+					filepath.Join(pkg, "node_modules", "@openai", "codex-linux-"+arch, "vendor"),
+					filepath.Join(filepath.Dir(pkg), "codex-linux-"+arch, "vendor"),
+				} {
+					candidate := filepath.Join(vendor, target, "codex", "codex")
+					if nativeELF(candidate) {
+						return candidate, nil
+					}
+				}
+			}
+		}
+	}
+	return "", errors.New("native executable unavailable")
+}
+
+func nativeELF(path string) bool {
+	info, err := os.Stat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Mode()&0111 == 0 {
+		return false
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	var magic [4]byte
+	n, _ := f.Read(magic[:])
+	return n == 4 && magic == [4]byte{0x7f, 'E', 'L', 'F'}
 }
 func (e executor) Exec(ctx context.Context, spec platform.Spec) (platform.ExecResult, error) {
 	failure := platform.ExecResult{State: platform.NotStarted}

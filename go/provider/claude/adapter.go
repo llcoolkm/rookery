@@ -27,6 +27,7 @@ type destination struct {
 	endpoint platform.Endpoint
 }
 type Adapter struct {
+	config       provider.Config
 	host         platform.Host
 	options      Options
 	busy         bool
@@ -47,7 +48,10 @@ func NewWithOptions(c provider.Config, h platform.Host, o Options) (*Adapter, er
 			busy = true
 		}
 	}
-	return &Adapter{host: h, options: o, busy: busy, destinations: map[string]destination{}}, nil
+	if c.SessionAllowlist != nil {
+		c.SessionAllowlist = append([]string{}, c.SessionAllowlist...)
+	}
+	return &Adapter{config: c, host: h, options: o, busy: busy, destinations: map[string]destination{}}, nil
 }
 func (*Adapter) Name() string { return "claude" }
 func (*Adapter) Capabilities() provider.Capabilities {
@@ -167,6 +171,18 @@ func (a *Adapter) Identity(ctx context.Context, _ core.CallMetadata) (string, er
 	return "claude:" + matches[0].ID, nil
 }
 func (a *Adapter) Discover(ctx context.Context) ([]core.Session, error) {
+	if a.config.SessionAllowlist != nil {
+		allowed := false
+		for _, id := range a.config.SessionAllowlist {
+			if strings.HasPrefix(id, "claude:") {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			return []core.Session{}, nil
+		}
+	}
 	rows, err := a.rows(ctx)
 	if err != nil {
 		return nil, err
@@ -184,7 +200,7 @@ func (a *Adapter) Discover(ctx context.Context) ([]core.Session, error) {
 		}
 	}
 	for _, r := range rows {
-		if !canonical(r.ID) || r.PID <= 0 || counts[r.ID] != 1 {
+		if !a.config.Allows("claude", r.ID) || !canonical(r.ID) || r.PID <= 0 || counts[r.ID] != 1 {
 			continue
 		}
 		pin, err := a.host.Process.Lookup(ctx, r.PID)
@@ -198,7 +214,14 @@ func (a *Adapter) Discover(ctx context.Context) ([]core.Session, error) {
 		s := core.Session{ProcessRef: &pin, Provider: "claude", ID: r.ID, Name: r.Name, PID: r.PID, Status: status}
 		s.Admission = string(a.Admission(s))
 		sessions = append(sessions, s)
-		file, err := a.host.Files.OpenNoFollow(ctx, root, fmt.Sprintf("sessions/%d.json", r.PID), false)
+		var file platform.File
+		if records, ok := a.host.Files.(interface {
+			OpenProviderRecord(context.Context, string, string) (platform.File, error)
+		}); ok {
+			file, err = records.OpenProviderRecord(ctx, root, fmt.Sprintf("sessions/%d.json", r.PID))
+		} else {
+			file, err = a.host.Files.OpenNoFollow(ctx, root, fmt.Sprintf("sessions/%d.json", r.PID), false)
+		}
 		if err != nil {
 			continue
 		}
@@ -214,14 +237,25 @@ func (a *Adapter) Discover(ctx context.Context) ([]core.Session, error) {
 		ep, err := a.host.Paths.HarnessEndpoint(ctx, "claude", file, record.Address, pin)
 		file.Close()
 		if err != nil || a.host.Process.Pin(ctx, pin) != nil {
+			if ep != "" {
+				a.revoke(ep)
+			}
 			continue
 		}
 		destinations[r.ID] = destination{pin: pin, endpoint: ep}
 	}
 	a.mu.Lock()
+	for _, old := range a.destinations {
+		a.revoke(old.endpoint)
+	}
 	a.destinations = destinations
 	a.mu.Unlock()
 	return sessions, nil
+}
+func (a *Adapter) revoke(ep platform.Endpoint) {
+	if paths, ok := a.host.Paths.(interface{ Revoke(platform.Endpoint) }); ok {
+		paths.Revoke(ep)
+	}
 }
 func (a *Adapter) Busy(ctx context.Context, s core.Session) (provider.BusyState, error) {
 	rows, err := a.rows(ctx)

@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"github.com/llcoolkm/rookery/go/platform"
 	"strings"
+	"sync"
 	"time"
+
+	"github.com/llcoolkm/rookery/go/platform"
 )
 
 type NativeHooks struct {
@@ -15,16 +17,22 @@ type NativeHooks struct {
 	Submit   func(context.Context, Session, Message) (DeliveryResult, error)
 }
 type Helper struct {
-	Process        platform.Process
-	Store          *LocalStore
-	Hub            HubClient
-	Node           string
-	Native         NativeHooks
-	Sessions       []Session
-	ProviderErrors map[string]string
-	lastSync       float64
-	nextDiscovery  time.Time
-	BusyDelivery   []string
+	Process          platform.Process
+	Store            *LocalStore
+	Hub              HubClient
+	Node             string
+	Native           NativeHooks
+	Sessions         []Session
+	ProviderErrors   map[string]string
+	syncMu           sync.Mutex
+	lastSync         float64
+	syncErr          error
+	syncRunning      bool
+	directoryVersion uint64
+	directoryLoaded  uint64
+	directoryReady   bool
+	nextDiscovery    time.Time
+	BusyDelivery     []string
 }
 
 func (h *Helper) Sync(ctx context.Context, wait float64) error {
@@ -47,7 +55,18 @@ func (h *Helper) Sync(ctx context.Context, wait float64) error {
 	} else if e = h.Store.Apply(ctx, r.Events, r.Cursor); e != nil {
 		return e
 	}
+	h.syncMu.Lock()
 	h.lastSync = seconds()
+	h.syncErr = nil
+	for _, event := range r.Events {
+		if event.Type == "directory" {
+			h.directoryVersion++
+		}
+	}
+	if r.Reset {
+		h.directoryVersion++
+	}
+	h.syncMu.Unlock()
 	return nil
 }
 func (h *Helper) Bootstrap(ctx context.Context) error {
@@ -96,6 +115,12 @@ func (h *Helper) Bootstrap(ctx context.Context) error {
 		previousAfter = *r.Next
 	}
 }
+func (h *Helper) dirtyDirectory() {
+	h.syncMu.Lock()
+	h.directoryVersion++
+	h.syncMu.Unlock()
+}
+
 func (h *Helper) Requests(ctx context.Context) error {
 	commands, e := h.Store.Commands(ctx, 64)
 	if e != nil {
@@ -112,6 +137,8 @@ func (h *Helper) Requests(ctx context.Context) error {
 			}
 		} else if e = h.Store.Complete(ctx, c.ID, RPCResponse{OK: true, Result: r}); e != nil {
 			return e
+		} else if c.Op == "enroll" || c.Op == "disable" || c.Op == "clear-alias" {
+			h.dirtyDirectory()
 		}
 	}
 	return nil
@@ -162,6 +189,7 @@ func (h *Helper) Publish(ctx context.Context) error {
 		return e
 	}
 	h.nextDiscovery = time.Now().Add(15 * time.Second)
+	h.dirtyDirectory()
 	return nil
 }
 func (h *Helper) Deliver(ctx context.Context) error {
@@ -260,11 +288,21 @@ func (h *Helper) Deliver(ctx context.Context) error {
 		if e = h.Store.FinishAttempt(ctx, d.ClaimID, result); e != nil {
 			return e
 		}
-		if live != nil {
+		if live == nil {
+			for i := range h.Sessions {
+				if &h.Sessions[i] == target {
+					h.Sessions = append(h.Sessions[:i], h.Sessions[i+1:]...)
+					break
+				}
+			}
+		} else {
 			*target = *live
+			if result.Status != "held" {
+				target.Status = "busy"
+			}
 		}
-		if result.Status != "held" {
-			target.Status = "busy"
+		if result.Status == "held" {
+			h.nextDiscovery = time.Time{}
 		}
 		if e = h.Report(ctx); e != nil {
 			return e
@@ -284,16 +322,30 @@ func (h *Helper) Cycle(ctx context.Context) error {
 	if e := h.Requests(ctx); e != nil {
 		return e
 	}
-	if e := h.Sync(ctx, 0); e != nil {
-		return e
+	h.syncMu.Lock()
+	background := h.syncRunning
+	h.syncMu.Unlock()
+	if !background {
+		if e := h.Sync(ctx, 0); e != nil {
+			return e
+		}
 	}
-	var directory map[string]any
-	if e := RPC(ctx, h.Hub, "list", map[string]any{}, &directory); e != nil {
-		return e
-	}
-	directory["updated"] = seconds()
-	if e := h.Store.Put(ctx, "directory", directory); e != nil {
-		return e
+	h.syncMu.Lock()
+	version := h.directoryVersion
+	dirty := !h.directoryReady || version != h.directoryLoaded
+	h.syncMu.Unlock()
+	if dirty {
+		var directory map[string]any
+		if e := RPC(ctx, h.Hub, "list", map[string]any{}, &directory); e != nil {
+			return e
+		}
+		directory["updated"] = seconds()
+		if e := h.Store.Put(ctx, "directory", directory); e != nil {
+			return e
+		}
+		h.syncMu.Lock()
+		h.directoryLoaded, h.directoryReady = version, true
+		h.syncMu.Unlock()
 	}
 	return h.Deliver(ctx)
 }
@@ -308,7 +360,13 @@ func (h *Helper) Health(ctx context.Context, running bool, cycleErr error) error
 	if cycleErr != nil {
 		detail = "helper cycle unavailable; requests remain queued"
 	}
-	return h.Store.Put(ctx, "health", map[string]any{"pid": pid, "running": running, "connected": running && cycleErr == nil && seconds()-h.lastSync < 40, "updated": seconds(), "node": h.Node, "error": detail, "provider_errors": h.ProviderErrors, "busy_delivery": h.BusyDelivery})
+	h.syncMu.Lock()
+	lastSync, syncErr := h.lastSync, h.syncErr
+	h.syncMu.Unlock()
+	if syncErr != nil {
+		detail = "helper sync unavailable; requests remain queued"
+	}
+	return h.Store.Put(ctx, "health", map[string]any{"pid": pid, "running": running, "connected": running && cycleErr == nil && syncErr == nil && seconds()-lastSync < 40, "updated": seconds(), "node": h.Node, "error": detail, "provider_errors": h.ProviderErrors, "busy_delivery": h.BusyDelivery})
 }
 func (h *Helper) Run(ctx context.Context, once bool) error {
 	lock, e := h.Store.Files.AdvisoryLock(ctx, h.Store.Root, "daemon.lock", false)
@@ -325,17 +383,54 @@ func (h *Helper) Run(ctx context.Context, once bool) error {
 		_ = h.Health(ctx, false, e)
 		return e
 	}
+	syncCtx, stopSync := context.WithCancel(ctx)
+	h.syncMu.Lock()
+	h.syncRunning = true
+	h.syncMu.Unlock()
+	syncDone := make(chan struct{})
+	go func() {
+		defer close(syncDone)
+		delay := time.Second
+		for syncCtx.Err() == nil {
+			if err := h.Sync(syncCtx, 10); err != nil {
+				h.syncMu.Lock()
+				h.syncErr = err
+				h.syncMu.Unlock()
+				select {
+				case <-syncCtx.Done():
+					return
+				case <-time.After(delay):
+				}
+				delay = min(30*time.Second, delay*2)
+			} else {
+				delay = time.Second
+			}
+		}
+	}()
+	defer func() {
+		stopSync()
+		<-syncDone
+		h.syncMu.Lock()
+		h.syncRunning = false
+		h.syncMu.Unlock()
+	}()
 	pruneAt := time.Time{}
+	healthAt := time.Time{}
+	delay := 250 * time.Millisecond
 	for {
 		e = h.Cycle(ctx)
-		_ = h.Health(ctx, true, e)
+		if time.Now().After(healthAt) || e != nil {
+			_ = h.Health(ctx, true, e)
+			healthAt = time.Now().Add(10 * time.Second)
+		}
 		if time.Now().After(pruneAt) {
 			_ = h.Store.Prune(ctx, time.Now())
 			pruneAt = time.Now().Add(time.Hour)
 		}
-		delay := 250 * time.Millisecond
 		if e != nil {
-			delay = time.Second
+			delay = min(30*time.Second, max(time.Second, delay*2))
+		} else {
+			delay = 250 * time.Millisecond
 		}
 		select {
 		case <-ctx.Done():

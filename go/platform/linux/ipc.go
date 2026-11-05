@@ -106,6 +106,24 @@ func (i *ipc) Dial(ctx context.Context, handle platform.Endpoint) (platform.Conn
 		}
 		return nil, err
 	}
+	// The first authenticated control connection pins the cached capability.
+	if e.expected == nil && !e.helper {
+		ref, pinErr := out.Peer()
+		if pinErr != nil {
+			out.Close()
+			return nil, pinErr
+		}
+		i.paths.mu.Lock()
+		current, live := i.paths.endpoints[handle]
+		if !live || current.expected != nil && *current.expected != ref {
+			i.paths.mu.Unlock()
+			out.Close()
+			return nil, errors.New("peer identity changed")
+		}
+		current.expected = &ref
+		i.paths.endpoints[handle] = current
+		i.paths.mu.Unlock()
+	}
 	return out, nil
 }
 

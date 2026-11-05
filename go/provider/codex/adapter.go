@@ -27,6 +27,7 @@ type Options struct {
 	MessageStdinFlag string
 }
 type Adapter struct {
+	config  provider.Config
 	host    platform.Host
 	options Options
 	mu      sync.Mutex
@@ -38,8 +39,18 @@ func (Factory) New(c provider.Config, h platform.Host) (provider.Provider, error
 func New(c provider.Config, h platform.Host) (*Adapter, error) {
 	return NewWithOptions(c, h, Options{})
 }
-func NewWithOptions(_ provider.Config, h platform.Host, o Options) (*Adapter, error) {
-	return &Adapter{host: h, options: o, pins: map[string]platform.ProcessRef{}}, nil
+func NewWithOptions(c provider.Config, h platform.Host, o Options) (*Adapter, error) {
+	if o.Executable == "" {
+		o.Executable = c.CodexExecutable
+	}
+	c.SessionAllowlist = appendAllowlist(c.SessionAllowlist)
+	return &Adapter{config: c, host: h, options: o, pins: map[string]platform.ProcessRef{}}, nil
+}
+func appendAllowlist(ids []string) []string {
+	if ids == nil {
+		return nil
+	}
+	return append([]string{}, ids...)
 }
 func (*Adapter) Name() string                        { return "codex" }
 func (*Adapter) Capabilities() provider.Capabilities { return provider.Capabilities{Topology: "host"} }
@@ -128,6 +139,9 @@ func (p *proxy) notify(method string, params any) error {
 	return p.ws.Send(b)
 }
 func (p *proxy) call(method string, params, out any) error {
+	if p.conn.SetDeadline(time.Now().Add(8*time.Second)) != nil {
+		return errDiscovery
+	}
 	p.counter++
 	b, err := json.Marshal(map[string]any{"id": p.counter, "method": method, "params": params})
 	if err != nil {
@@ -196,6 +210,18 @@ func Normalize(t Thread) core.Session {
 	return core.Session{Provider: "codex", ID: t.ID, Name: name, Status: status}
 }
 func (a *Adapter) Discover(ctx context.Context) ([]core.Session, error) {
+	if a.config.SessionAllowlist != nil {
+		allowed := false
+		for _, id := range a.config.SessionAllowlist {
+			if strings.HasPrefix(id, "codex:") {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			return []core.Session{}, nil
+		}
+	}
 	p, err := a.open(ctx)
 	if err != nil {
 		return nil, err
@@ -223,6 +249,9 @@ func (a *Adapter) Discover(ctx context.Context) ([]core.Session, error) {
 			return nil, err
 		}
 		for _, id := range listing.Data {
+			if !a.config.Allows("codex", id) {
+				continue
+			}
 			if seen[id] {
 				continue
 			}
@@ -322,7 +351,8 @@ func (a *Adapter) Deliver(ctx context.Context, s core.Session, m core.Message) (
 	if executable == "" || a.host.Exec == nil {
 		return outcome("held", "Codex executable unavailable; no submission attempted")
 	}
-	// The baseline only documents --message argv. Never infer that '-' means stdin.
+	// Prefer an explicitly advertised stdin route. Linux alone permits the
+	// documented argv fallback; never infer that '-' means stdin.
 	flag := a.options.MessageStdinFlag
 	if flag == "" {
 		flag = "--message-stdin"
@@ -331,13 +361,24 @@ func (a *Adapter) Deliver(ctx context.Context, s core.Session, m core.Message) (
 		return outcome("held", "Codex queue has no verified private input route; no submission attempted")
 	}
 	help, err := a.host.Exec.Exec(ctx, platform.Spec{Path: executable, Args: []string{"queue", "--help"}, Timeout: 5 * time.Second, MaxOutput: 64 << 10})
-	if err != nil || help.State != platform.Completed || help.ExitCode != 0 || !hasFlag(string(help.Stdout), flag) {
+	if err != nil || help.State != platform.Completed || help.ExitCode != 0 {
 		return outcome("held", "Codex queue has no verified private input route; no submission attempted")
 	}
 	if a.host.Process.Pin(ctx, pin) != nil || m.Expires <= float64(time.Now().UnixNano())/1e9 {
 		return outcome("held", "session identity or expiry changed; no submission attempted")
 	}
-	result, err := a.host.Exec.Exec(ctx, platform.Spec{Path: executable, Args: []string{"queue", "--thread", s.ID, flag}, Stdin: []byte(core.Render(m)), Timeout: 20 * time.Second, MaxOutput: 64 << 10})
+	args := []string{"queue", "--thread", s.ID, flag}
+	stdin := []byte(core.Render(m))
+	if !hasFlag(string(help.Stdout), flag) {
+		argv, linux := a.host.Exec.(interface{ LinuxMessageArgv() bool })
+		if !linux || !argv.LinuxMessageArgv() || !hasFlag(string(help.Stdout), "--message") {
+			return outcome("held", "Codex queue has no verified private input route; no submission attempted")
+		}
+		// Linux Python parity: argv is visible to local process inspection.
+		args = []string{"queue", "--thread", s.ID, "--message", string(stdin)}
+		stdin = nil
+	}
+	result, err := a.host.Exec.Exec(ctx, platform.Spec{Path: executable, Args: args, Stdin: stdin, Timeout: 20 * time.Second, MaxOutput: 64 << 10})
 	if result.State == platform.NotStarted {
 		return outcome("failed", "Codex queue did not start")
 	}

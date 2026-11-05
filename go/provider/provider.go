@@ -7,6 +7,7 @@ import (
 	"context"
 	"github.com/llcoolkm/rookery/go/core"
 	"github.com/llcoolkm/rookery/go/platform"
+	"strings"
 )
 
 // Capabilities express real delivery guarantees; transport acceptance is not
@@ -21,7 +22,9 @@ type Capabilities struct {
 // slice disables opt-in busy delivery. Unknown providers cannot gain capability.
 // Factories must snapshot the slice so later caller mutations cannot change policy.
 type Config struct {
-	BusyDelivery []string
+	CodexExecutable  string
+	BusyDelivery     []string
+	SessionAllowlist []string
 }
 
 // Factory constructs a provider with its startup busy_delivery policy and host.
@@ -62,4 +65,30 @@ type Provider interface {
 	Discover(context.Context) ([]core.Session, error)
 	Deliver(context.Context, core.Session, core.Message) (core.DeliveryResult, error)
 	Busy(context.Context, core.Session) (BusyState, error)
+}
+
+// Allows limits daemon discovery before provider records or sockets are opened.
+// Nil is reserved for explicitly unrestricted library callers; daemons pass []
+// when no coexistence allowlist has been configured.
+func (c Config) Allows(name, id string) bool {
+	if c.SessionAllowlist == nil {
+		return true
+	}
+	for _, target := range c.SessionAllowlist {
+		if target == name+":"+strings.ToLower(id) {
+			return true
+		}
+	}
+	return false
+}
+func (c Config) AllowsProvider(name string) bool {
+	if c.SessionAllowlist == nil {
+		return true
+	}
+	for _, target := range c.SessionAllowlist {
+		if strings.HasPrefix(target, name+":") {
+			return true
+		}
+	}
+	return false
 }

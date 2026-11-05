@@ -14,6 +14,7 @@ import (
 )
 
 type Registry struct {
+	Config    provider.Config
 	Host      platform.Host
 	Providers map[string]provider.Provider
 }
@@ -21,7 +22,7 @@ type Registry struct {
 func NewRegistry(c provider.Config, h platform.Host) *Registry {
 	co, _ := codex.New(c, h)
 	cl, _ := claude.New(c, h)
-	return &Registry{Host: h, Providers: map[string]provider.Provider{"codex": co, "claude": cl, "agy": agyStub{}}}
+	return &Registry{Config: c, Host: h, Providers: map[string]provider.Provider{"codex": co, "claude": cl, "agy": agyStub{}}}
 }
 func (r *Registry) Provider(name string) provider.Provider { return r.Providers[name] }
 func (r *Registry) Discover(ctx context.Context) ([]core.Session, map[string]string) {
@@ -33,13 +34,16 @@ func (r *Registry) Discover(ctx context.Context) ([]core.Session, map[string]str
 	}
 	sort.Strings(names)
 	for _, name := range names {
+		if !r.Config.AllowsProvider(name) {
+			continue
+		}
 		rows, err := r.Providers[name].Discover(ctx)
 		if err != nil {
 			problems[name] = "provider discovery unavailable"
 			continue
 		}
 		for _, s := range rows {
-			if s.Provider != name {
+			if s.Provider != name || !r.Config.Allows(name, s.ID) {
 				continue
 			}
 			if _, err := core.RequestCreated(s.ID); err != nil {
@@ -67,7 +71,7 @@ func (r *Registry) Discover(ctx context.Context) ([]core.Session, map[string]str
 	}
 	root, err := r.Host.Paths.StateDir()
 	if err == nil {
-		polling, e := DiscoverPolling(ctx, r.Host, root)
+		polling, e := discoverPolling(ctx, r.Host, root, r.Config)
 		if e != nil {
 			problems["polling"] = "polling discovery unavailable"
 		} else {

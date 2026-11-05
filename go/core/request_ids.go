@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -31,6 +32,7 @@ func NewRequestID(now time.Time) (string, error) {
 // RequestCreated extracts UUIDv7 time; legacy canonical UUIDs return nil.
 // Acceptance windows and legacy migration deadlines are hub policy (phase 2).
 func RequestCreated(id string) (*time.Time, error) {
+	id = strings.ToLower(id)
 	if len(id) != 36 || id[8] != '-' || id[13] != '-' || id[18] != '-' || id[23] != '-' {
 		return nil, fmt.Errorf("ID must be a canonical UUID")
 	}

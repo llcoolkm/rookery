@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/llcoolkm/rookery/go/core"
+	"github.com/llcoolkm/rookery/go/platform"
 	hostlinux "github.com/llcoolkm/rookery/go/platform/linux"
 	"os"
 	"path/filepath"
@@ -168,5 +169,91 @@ func TestPendingDeliveryNotHiddenByHistory(t *testing.T) {
 	rows, e := s.PendingMessages(ctx, "alpha", 1)
 	if e != nil || len(rows) != 1 || rows[0].ID != "pending" {
 		t.Fatal("incoming pending work hidden by message history")
+	}
+}
+
+type observedFiles struct {
+	platform.Files
+	writes     int
+	afterWrite func()
+}
+
+func (f *observedFiles) AtomicWrite(ctx context.Context, root, name string, data []byte) error {
+	err := f.Files.AtomicWrite(ctx, root, name, data)
+	if err == nil {
+		f.writes++
+		if f.afterWrite != nil {
+			f.afterWrite()
+		}
+	}
+	return err
+}
+func TestStoreSkipsUnchangedSnapshots(t *testing.T) {
+	s := newStore(t)
+	f := &observedFiles{Files: s.Files}
+	s.Files = f
+	ctx := context.Background()
+	if err := s.Apply(ctx, nil, 0); err != nil {
+		t.Fatal(err)
+	}
+	if f.writes != 0 {
+		t.Fatal("unchanged empty sync rewrote store")
+	}
+	if err := s.Apply(ctx, nil, 7); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Apply(ctx, nil, 7); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RecoverAttempts(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if f.writes != 1 {
+		t.Fatal("unchanged snapshot rewrote store", f.writes)
+	}
+}
+func TestClientCancellationAfterAdmissionRemainsQueued(t *testing.T) {
+	s := newStore(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	f := &observedFiles{Files: s.Files, afterWrite: cancel}
+	s.Files = f
+	c := core.Client{Store: s}
+	r, err := c.Request(ctx, "ack", map[string]any{"message_id": messageID}, time.Second)
+	if err != nil || r["status"] != "queued_local" {
+		t.Fatal("admitted command not returned as queued", r, err)
+	}
+	commands, err := s.Commands(context.Background(), 10)
+	if err != nil || len(commands) != 1 || commands[0].ID != r["request_id"] {
+		t.Fatal("admitted command lost")
+	}
+}
+func TestClientRejectsNonBooleanPeek(t *testing.T) {
+	c := core.Client{Store: newStore(t), Config: core.Config{Node: "alpha"}, Actor: "claude:" + sessionID}
+	for _, value := range []any{"false", 0, nil} {
+		if _, err := c.Invoke(context.Background(), "inbox", map[string]any{"peek": value}); err == nil {
+			t.Fatal("invalid peek accepted", value)
+		}
+	}
+}
+
+type undurableFiles struct{ platform.Files }
+
+func (f undurableFiles) AtomicWrite(ctx context.Context, root, name string, data []byte) error {
+	if err := f.Files.AtomicWrite(ctx, root, name, data); err != nil {
+		return err
+	}
+	return platform.ErrCommittedNotDurable
+}
+func TestAdmissionAfterRenameFailureRemainsQueuedButClaimFailsClosed(t *testing.T) {
+	s := newStore(t)
+	s.Files = undurableFiles{s.Files}
+	c := core.Client{Store: s}
+	result, err := c.Request(context.Background(), "ack", map[string]any{"message_id": messageID}, time.Second)
+	if err != nil || result["status"] != "queued_local" {
+		t.Fatal("renamed command misreported as rejected", result, err)
+	}
+	if err := s.StartAttempt(context.Background(), messageID, claimID); !errors.Is(err, platform.ErrCommittedNotDurable) {
+		t.Fatal("undurable native journal permitted submission", err)
 	}
 }

@@ -1,15 +1,17 @@
 package core
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
-	"github.com/llcoolkm/rookery/go/platform"
 	"io"
 	"io/fs"
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/llcoolkm/rookery/go/platform"
 )
 
 // LocalStore uses one fsynced atomic snapshot, serialized by a cross-process
@@ -70,6 +72,7 @@ func (s *LocalStore) transaction(ctx context.Context, write bool, fn func(*local
 	} else if !errors.Is(e, fs.ErrNotExist) {
 		return errors.New("local store unavailable")
 	}
+	before, _ := json.Marshal(state)
 	if e = fn(state); e != nil {
 		return e
 	}
@@ -80,10 +83,16 @@ func (s *LocalStore) transaction(ctx context.Context, write bool, fn func(*local
 	if e != nil {
 		return errors.New("invalid local store")
 	}
+	if bytes.Equal(before, raw) {
+		return nil
+	}
 	if len(raw) > 256<<20 {
 		return errors.New("local store capacity reached")
 	}
-	if s.Files.AtomicWrite(ctx, s.Root, "store.json", raw) != nil {
+	if err := s.Files.AtomicWrite(ctx, s.Root, "store.json", raw); err != nil {
+		if errors.Is(err, platform.ErrCommittedNotDurable) {
+			return err
+		}
 		return errors.New("local store unavailable")
 	}
 	return nil
