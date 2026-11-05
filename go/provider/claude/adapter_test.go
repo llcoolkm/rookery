@@ -225,3 +225,16 @@ func TestWrapperSanitizesNames(t *testing.T) {
 		t.Fatal(wrapped)
 	}
 }
+
+func TestRediscoveryCannotReplaceClaimProcessPin(t *testing.T) {
+	adapter, _, ipc, _, session := fixture(t, provider.Config{})
+	changed := testPin
+	changed.Start = "reused"
+	old := adapter.destinations[session.ID]
+	old.pin = changed
+	adapter.destinations[session.ID] = old
+	result, _ := adapter.Deliver(context.Background(), session, message())
+	if result.Status != "held" || ipc.calls != 0 {
+		t.Fatal("rediscovery replaced the captured process pin", result)
+	}
+}

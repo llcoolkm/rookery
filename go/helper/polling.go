@@ -95,7 +95,7 @@ func DiscoverPolling(ctx context.Context, h platform.Host, root string) ([]core.
 		if json.Unmarshal(b, &record) != nil || pollingIdentity(record.Provider, record.ID) != nil || entry.Name != pollingName(record.Provider, record.ID) || !validName(record.Name) || h.Process.Pin(ctx, record.Pin) != nil {
 			continue
 		}
-		result = append(result, core.Session{Provider: record.Provider, ID: record.ID, PID: record.Pin.PID, Name: record.Name, Status: "waiting", Delivery: "polling", Admission: "none"})
+		result = append(result, core.Session{ProcessRef: &record.Pin, Provider: record.Provider, ID: record.ID, PID: record.Pin.PID, Name: record.Name, Status: "waiting", Delivery: "polling", Admission: "none"})
 	}
 	return result, nil
 }

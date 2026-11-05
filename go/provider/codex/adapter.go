@@ -244,6 +244,7 @@ func (a *Adapter) Discover(ctx context.Context) ([]core.Session, error) {
 			}
 			row := Normalize(reply.Thread)
 			row.PID = peer.PID
+			row.ProcessRef = &peer
 			row.Admission = string(a.Admission(row))
 			rows = append(rows, row)
 			pins[id] = peer
@@ -292,7 +293,7 @@ func (a *Adapter) Deliver(ctx context.Context, s core.Session, m core.Message) (
 	a.mu.Lock()
 	pin, ok := a.pins[s.ID]
 	a.mu.Unlock()
-	if !ok || pin.PID != s.PID || a.host.Process.Pin(ctx, pin) != nil {
+	if !ok || s.ProcessRef == nil || *s.ProcessRef != pin || pin.PID != s.PID || a.host.Process.Pin(ctx, pin) != nil {
 		return outcome("held", "session identity changed; no submission attempted")
 	}
 	p, err := a.open(ctx)

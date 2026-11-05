@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"io"
 	"time"
+
+	"github.com/llcoolkm/rookery/go/platform"
 )
 
 const (
@@ -111,6 +113,8 @@ type Event struct {
 	Data  json.RawMessage            `json:"data"`
 }
 type Session struct {
+	// ProcessRef is captured at discovery and never sent over the hub wire.
+	ProcessRef        *platform.ProcessRef       `json:"-"`
 	Extra             map[string]json.RawMessage `json:"-"`
 	Node              string                     `json:"node,omitempty"`
 	Online            *bool                      `json:"online,omitempty"`

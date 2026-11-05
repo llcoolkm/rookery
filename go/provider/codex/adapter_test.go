@@ -249,3 +249,18 @@ func TestNormalizeStates(t *testing.T) {
 }
 
 var _ io.ReadWriteCloser = (*fakeConn)(nil)
+
+func TestRediscoveryCannotReplaceClaimProcessPin(t *testing.T) {
+	adapter, _, exec, _, session := fixture(t)
+	changed := testPin
+	changed.Start = "reused"
+	adapter.pins[session.ID] = changed
+	result, _ := adapter.Deliver(context.Background(), session, message())
+	if result.Status != "held" || len(exec.specs) != 0 {
+		t.Fatal("rediscovery replaced the captured process pin", result)
+	}
+	encoded, err := json.Marshal(session)
+	if err != nil || bytes.Contains(encoded, []byte("BootID")) || bytes.Contains(encoded, []byte("ProcessRef")) {
+		t.Fatal("private process identity reached session wire")
+	}
+}

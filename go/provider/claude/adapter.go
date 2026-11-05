@@ -195,7 +195,7 @@ func (a *Adapter) Discover(ctx context.Context) ([]core.Session, error) {
 		if status != "idle" && status != "busy" && status != "waiting" {
 			status = "unknown"
 		}
-		s := core.Session{Provider: "claude", ID: r.ID, Name: r.Name, PID: r.PID, Status: status}
+		s := core.Session{ProcessRef: &pin, Provider: "claude", ID: r.ID, Name: r.Name, PID: r.PID, Status: status}
 		s.Admission = string(a.Admission(s))
 		sessions = append(sessions, s)
 		file, err := a.host.Files.OpenNoFollow(ctx, root, fmt.Sprintf("sessions/%d.json", r.PID), false)
@@ -292,7 +292,7 @@ func (a *Adapter) Deliver(ctx context.Context, s core.Session, m core.Message) (
 	a.mu.Lock()
 	dest, ok := a.destinations[s.ID]
 	a.mu.Unlock()
-	if !ok || dest.pin.PID != s.PID || a.host.Process.Pin(ctx, dest.pin) != nil {
+	if !ok || s.ProcessRef == nil || *s.ProcessRef != dest.pin || dest.pin.PID != s.PID || a.host.Process.Pin(ctx, dest.pin) != nil {
 		return outcome("held", "session identity changed; no submission attempted")
 	}
 	state, err := a.Busy(ctx, s)
