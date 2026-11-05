@@ -46,14 +46,8 @@ func NewLocalStore(ctx context.Context, files platform.Files, root string) (*Loc
 	if e != nil {
 		return nil, e
 	}
-	entries, e := files.List(ctx, root)
-	if e != nil {
-		return nil, errors.New("local store unavailable")
-	}
-	for _, entry := range entries {
-		if entry.Name == "helper.sqlite3" || entry.Name == "spool" || entry.Name == "results" {
-			return nil, errors.New("Python helper state cannot be opened by the Go helper; use a separate state directory")
-		}
+	if e = ValidateGoState(ctx, files, root); e != nil {
+		return nil, e
 	}
 	s := &LocalStore{files, root}
 	e = s.transaction(ctx, false, func(*localState) error { return nil })
@@ -374,4 +368,18 @@ func (s *LocalStore) PendingMessages(ctx context.Context, node string, limit int
 		return nil
 	})
 	return
+}
+
+// ValidateGoState inspects names only, before config reads or lock acquisition.
+func ValidateGoState(ctx context.Context, files platform.Files, root string) error {
+	entries, e := files.List(ctx, root)
+	if e != nil {
+		return errors.New("local store unavailable")
+	}
+	for _, entry := range entries {
+		if entry.Name == "helper.sqlite3" || entry.Name == "helper.sqlite3-wal" || entry.Name == "spool" || entry.Name == "results" {
+			return errors.New("Python helper state cannot be opened by the Go helper; use a separate state directory")
+		}
+	}
+	return nil
 }

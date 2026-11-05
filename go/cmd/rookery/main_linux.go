@@ -108,6 +108,9 @@ func runPlatform(ctx context.Context, args []string) (any, error) {
 		return nil, errors.New("state directory must be private (0700), owned by this user, and not a symlink")
 	}
 	root, _ := h.Paths.StateDir()
+	if e = core.ValidateGoState(ctx, h.Files, root); e != nil {
+		return nil, e
+	}
 	if a.command == "service" {
 		return serviceCommand(ctx, h, root, a)
 	}

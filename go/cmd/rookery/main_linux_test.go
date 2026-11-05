@@ -98,3 +98,23 @@ func TestParserReorderedFlags(t *testing.T) {
 		}
 	}
 }
+
+func TestCLIRefusesPythonStateBeforeConfigurationOrService(t *testing.T) {
+	root := t.TempDir()
+	if e := os.Chmod(root, 0700); e != nil {
+		t.Fatal(e)
+	}
+	marker := filepath.Join(root, "helper.sqlite3")
+	if e := os.WriteFile(marker, []byte("synthetic marker; never open"), 0600); e != nil {
+		t.Fatal(e)
+	}
+	for _, cmd := range []string{"configure", "service", "mcp"} {
+		if _, e := runPlatform(context.Background(), []string{"--state-dir", root, cmd}); e == nil || !strings.Contains(e.Error(), "Python helper state") {
+			t.Fatal("Python helper root accepted")
+		}
+	}
+	entries, e := os.ReadDir(root)
+	if e != nil || len(entries) != 1 || entries[0].Name() != "helper.sqlite3" {
+		t.Fatal("refused Python root was modified")
+	}
+}
