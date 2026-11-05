@@ -225,20 +225,18 @@ execution on hosted runners and the live-server procedure below are unverified.
 - **Native acceptance is outstanding.** Synthetic socket protocols and local hub
   compatibility do not prove compatibility with any installed harness version,
   actual busy-turn behavior, real restart/reconnect behavior, or WSL startup.
-- **Codex private input depends on harness support.** Python's baseline documents
-  only `queue --message` argv. Go probes `queue --help` and submits the body on
-  stdin only when the exact `--message-stdin` option is advertised. Otherwise it
-  reports held before submission. It never assumes `--message -` means stdin;
-  private-file queue options are not implemented. This is a deliberate,
-  documented native-delivery gap for baseline builds.
+- **Codex input exposure on Linux.** Go prefers advertised `--message-stdin`.
+  Baseline builds use `queue --message` argv for Python parity on Linux only;
+  message text is visible to local process inspection and possibly audit logs.
+  Windows requires stdin/private-file support and otherwise holds delivery.
 - **Claude needs a verified socket record.** Go uses the verified owned
   `sessions/<pid>.json` record and its `messagingSocketPath`; it does not guess a
   socket when that record/address is absent. Missing evidence prevents push.
 - **Native executable requirement.** Linux execution requires a native ELF
-  executable; npm/shebang launchers and shell fallbacks are refused. Put the
-  actual native provider executable on PATH. Native packaging must be validated
+  executable; npm/shebang launchers and shell fallbacks are refused. Codex resolves the npm package vendor binary without executing the shim, or
+  uses an absolute native path supplied with `configure --executable`. Native packaging must be validated
   on the acceptance host.
-- **Installer differences.** Existing MCP entries are preserved. Claude's text
+- **Installer differences.** The Go server is named `rookery-go`; it never queries or changes `rookery`. Existing `rookery-go` entries are preserved. Claude's text
   listing cannot prove exact argv boundaries. Existing provider settings must be
   private; Python can preserve broader existing modes. Go supplies an old-tool
   grant note but does not inspect historical permission grants individually.
@@ -261,16 +259,29 @@ execution on hosted runners and the live-server procedure below are unverified.
 
 ### Live-server acceptance procedure (Claude runs this)
 
-Do not infer approval from the isolated tests. Use two newly created, disjoint
+Do not infer approval from the isolated tests. Run this procedure in a disposable
+OS test account with isolated provider homes containing only test sessions. The
+Python daemon has host-wide discovery; temporary helper state alone does not
+isolate it. Never run `install --apply` on the production account. Use two newly created, disjoint
 native harness sessions and dedicated authorized test nodes on the existing
 hub; leave ordinary enrolled sessions out of these tests. Supply these values
 locally without saving them to the public repository or transcript:
 `HUB_ORIGIN`, `GO_NODE`, `PY_NODE`, private `GO_TOKEN_FILE`/`PY_TOKEN_FILE`, and
 local `GO_SESSION`/`PY_SESSION` addresses. Select Codex for one session and Claude
 for the other, then repeat with the Go recipient on the other provider. Before
-push testing, establish that the native binaries, socket records and Codex stdin
-flag meet the constraints above. An unsupported Codex build is a recorded held
+push testing, establish that the native binaries and socket records meet the
+constraints above; record whether Codex uses stdin or Linux argv exposure. An unsupported Codex build is a recorded held
 outcome, not a passed push gate.
+
+Create two fresh test-node credentials locally with `umask 077` and
+`secrets.token_urlsafe(32)`; write each to its own 0600 `GO_TOKEN_FILE` or
+`PY_TOKEN_FILE`, never stdout. The hub administrator atomically merges only
+`GO_NODE` and `PY_NODE` mapped to their token SHA-256 hex digests into the hub's
+token-hash JSON, preserving all other entries and its existing owner/mode
+(root-owned 0640 or hub-user-owned 0600). See [token rules](operations.md#tokens).
+Authentication reloads this file on every request. To revoke, atomically remove
+exactly those two node keys, preserve all others, and verify requests with both
+test credentials receive 401. Do not copy or expose existing credentials.
 
 From the reviewed bundle checkout, with `GO_BIN` an absolute temporary binary:
 
@@ -291,6 +302,37 @@ PY_DAEMON=$!
 "$GO_BIN" --state-dir "$GO_STATE" list
 uv run --frozen --extra hub rookery --state-dir "$PY_STATE" list
 ```
+
+Bind each fresh harness session to its own helper before starting it. For
+Codex use a per-invocation override (substitute the intended helper and state):
+
+```sh
+codex -c 'mcp_servers.rookery.enabled=false' \
+  -c "mcp_servers.rookery-go={command=\"$GO_BIN\",args=[\"--state-dir\",\"$GO_STATE\",\"mcp\",\"--provider\",\"codex\"]}"
+```
+
+For Claude, create a 0600 temporary JSON config with only
+`{"mcpServers":{"rookery-go":{"command":"<absolute helper>","args":["--state-dir","<test state>","mcp","--provider","claude"]}}}`
+using a JSON encoder, save its path as `GO_MCP_CONFIG` or `PY_MCP_CONFIG`, then launch
+`claude --mcp-config "$GO_MCP_CONFIG" --strict-mcp-config` (use the Python
+config for that session).
+Create a distinct config for the Python session with its Python helper executable
+and `PY_STATE`. The strict config prevents inherited `rookery` entries. Confirm
+the tool list shows only the intended test server. Capture session IDs privately,
+configure the Go allowlist with exactly its test session, then restart:
+
+```sh
+"$GO_BIN" --state-dir "$GO_STATE" configure --node "$GO_NODE" \
+  --url "$HUB_ORIGIN" --token-file "$GO_TOKEN_FILE" \
+  --session-allowlist "$GO_SESSION"
+kill "$GO_DAEMON"
+wait "$GO_DAEMON"
+"$GO_BIN" --state-dir "$GO_STATE" daemon >>"$GO_STATE/daemon.log" 2>&1 &
+GO_DAEMON=$!
+```
+
+ Missing/empty `session_allowlist` discovers nothing and logs that fact.
+Do not add production IDs. The Python account must contain only disposable tests.
 
 Wait until those two fresh sessions are visible at their intended nodes. Then:
 
@@ -354,12 +396,38 @@ peek inbox; expired unread mail should remain visible until fetched once.
 Cleanup only these test enrollments and the processes started above:
 
 ```sh
+"$GO_BIN" --state-dir "$GO_STATE" clear-alias "$GO_SESSION"
 "$GO_BIN" --state-dir "$GO_STATE" disable "$GO_SESSION"
+uv run --frozen --extra hub rookery --state-dir "$PY_STATE" clear-alias "$PY_SESSION"
 uv run --frozen --extra hub rookery --state-dir "$PY_STATE" disable "$PY_SESSION"
 kill "$GO_DAEMON" "$PY_DAEMON"
 wait "$GO_DAEMON" "$PY_DAEMON"
 ```
 
-Keep the private temporary roots until Claude finishes reviewing uncertain-attempt
-evidence. Publication, replacement of the Python helper and claiming ordinary
+After reviewing uncertain-attempt evidence, have the hub administrator revoke
+both test-node tokens as above, confirm 401, then remove temporary MCP configs,
+credential files and test roots:
+
+```sh
+rm -f -- "${GO_MCP_CONFIG:-}" "${PY_MCP_CONFIG:-}" "$GO_TOKEN_FILE" "$PY_TOKEN_FILE"
+rm -rf -- "${GO_STATE:?}" "${PY_STATE:?}"
+```
+
+ Publication, replacement of the Python helper and claiming ordinary
 live sessions remain separate decisions.
+
+### Phase 2 review-fix verification
+
+The review-fix candidate passed 310 Python tests, `go vet ./...`, `go test ./...`
+(including built `daemon`/`mcp` cross-delivery against a temporary Python hub),
+`go test -race ./...`, Linux and Windows cross-builds, the portable OS-import
+gate, whitespace validation, and an added-line privacy grep. Tests use synthetic
+credentials, sessions, records, executables and local sockets. Windows build
+success is not native Windows runtime evidence. No live acceptance was run.
+
+The acceptance procedure additionally requires a disposable OS account because
+Python discovery is host-wide. Go discovery requires explicit configured session
+IDs during coexistence. The Linux Codex argv fallback deliberately retains the
+Python baseline's local process/audit exposure. Post-rename directory-fsync
+failure reports local admission as queued, while native attempt journaling
+continues to fail closed. No review recommendation was rejected.
