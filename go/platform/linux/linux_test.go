@@ -345,3 +345,19 @@ func TestListDescriptorRelativeMetadata(t *testing.T) {
 		t.Fatal("descriptor relative listing failed", e)
 	}
 }
+
+func TestWSLInstallReportsIncompleteBootIntegration(t *testing.T) {
+	host, root := testHost(t)
+	ctx := context.Background()
+	svc := host.Service.(interface{ ConfigureBackend(string) error })
+	if e := svc.ConfigureBackend("wsl"); e != nil {
+		t.Fatal(e)
+	}
+	if e := host.Service.Install(ctx, platform.ServiceSpec{Executable: "/native/program", StateDir: root}); e == nil || !strings.Contains(e.Error(), "automatic boot installation is unavailable") {
+		t.Fatal("WSL install claimed complete integration")
+	}
+	status, e := host.Service.Status(ctx)
+	if e != nil || status.Installed || status.Running || !strings.Contains(status.Detail, "boot integration requires") {
+		t.Fatal("WSL status hid incomplete startup integration")
+	}
+}

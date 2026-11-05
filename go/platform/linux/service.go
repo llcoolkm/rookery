@@ -126,7 +126,13 @@ func (s *service) Install(ctx context.Context, spec platform.ServiceSpec) error 
 	if e != nil {
 		return errors.New("invalid service specification")
 	}
-	return s.paths.files.AtomicWrite(ctx, s.paths.state, "service.json", data)
+	if e = s.paths.files.AtomicWrite(ctx, s.paths.state, "service.json", data); e != nil {
+		return e
+	}
+	if backend == "wsl" {
+		return errors.New("WSL supervisor configured; automatic boot installation is unavailable; install the reviewed WSL boot command separately")
+	}
+	return nil
 }
 func (s *service) read(ctx context.Context) (serviceConfig, error) {
 	var config serviceConfig
@@ -190,6 +196,9 @@ func (s *service) Status(ctx context.Context) (platform.ServiceStatus, error) {
 	} else {
 		_, e = s.record(ctx)
 		running = e == nil
+	}
+	if config.Backend == "wsl" {
+		return platform.ServiceStatus{Installed: false, Running: running, Detail: "WSL supervisor configured; boot integration requires installing the reviewed WSL boot command"}, nil
 	}
 	return platform.ServiceStatus{Installed: true, Running: running, Detail: config.Backend}, nil
 }
