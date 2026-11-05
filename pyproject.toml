@@ -49,6 +49,7 @@ include = [
     "/src/rookery",
     "/tests",
     "/scripts",
+    "/go/contract/testdata",
     "/integrations",
     "/service",
     "/assets",
