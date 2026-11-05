@@ -83,8 +83,8 @@ func TestCLIIsolatedPollingAndConfiguration(t *testing.T) {
 		t.Fatal("conflicting MCP binding accepted")
 	}
 	v = run("service", "install", "--dry-run", "--backend", "manual").(map[string]any)
-	if v["unit"] != "rookery-go.service" {
-		t.Fatal("unit collision")
+	if v["backend"] != "manual" || v["started"] != false {
+		t.Fatal("invalid service plan")
 	}
 }
 func TestParserReorderedFlags(t *testing.T) {

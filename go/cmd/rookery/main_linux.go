@@ -356,8 +356,12 @@ func serviceCommand(ctx context.Context, h platform.Host, root string, a argumen
 			}
 		}
 		if a.options["dry-run"] == "true" {
-			unit, e := linux.UserUnit(spec)
-			return map[string]any{"unit": "rookery-go.service", "text": unit}, e
+			if planner, ok := s.(interface {
+				Plan(context.Context, platform.ServiceSpec) (any, error)
+			}); ok {
+				return planner.Plan(ctx, spec)
+			}
+			return nil, errors.New("service installation plan unavailable")
 		}
 		if e := s.Install(ctx, spec); e != nil {
 			return nil, errors.New("service installation failed")
