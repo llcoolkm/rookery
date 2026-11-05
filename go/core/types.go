@@ -49,22 +49,23 @@ type Message struct {
 	RequestedExpires *float64 `json:"requested_expires"`
 	Updated          float64  `json:"updated"`
 	ReceivedAt       *float64 `json:"received_at,omitempty"`
+	BodyRetained     *bool    `json:"body_retained,omitempty"`
 	ID               string   `json:"id"`
 	Sender           string   `json:"sender"`
 	Recipient        string   `json:"recipient"`
 	Kind             Kind     `json:"kind"`
 	Body             string   `json:"body"`
 	Status           Status   `json:"status"`
-	Created          float64  `json:"created,omitempty"`
+	Created          float64  `json:"created"`
 	Expires          float64  `json:"expires"`
 	ReceivedByHost   *bool    `json:"received_by_host,omitempty"`
 	ReadAt           *float64 `json:"read_at,omitempty"`
 	Detail           string   `json:"detail,omitempty"`
 	ReplyID          string   `json:"reply_id,omitempty"`
-	InReplyTo        string   `json:"in_reply_to,omitempty"`
+	InReplyTo        *string  `json:"in_reply_to"`
 	FollowupID       string   `json:"followup_id,omitempty"`
 	Conversation     string   `json:"conversation,omitempty"`
-	Hops             int      `json:"hops,omitempty"`
+	Hops             int      `json:"hops"`
 	ClaimID          string   `json:"claim_id,omitempty"`
 }
 
@@ -104,16 +105,20 @@ type Event struct {
 	Data json.RawMessage `json:"data"`
 }
 type Session struct {
-	ID        string `json:"id"`
-	Provider  string `json:"provider"`
-	Key       string `json:"key,omitempty"`
-	Name      string `json:"name"`
-	Status    string `json:"status"`
-	PID       int    `json:"pid,omitempty"`
-	Delivery  string `json:"delivery,omitempty"`
-	Admission string `json:"admission,omitempty"`
-	Enrolled  bool   `json:"enrolled"`
-	Alias     string `json:"alias,omitempty"`
+	Node              string `json:"node,omitempty"`
+	Online            *bool  `json:"online,omitempty"`
+	EnrollmentCurrent *bool  `json:"enrollment_current,omitempty"`
+	DeliveryBlocker   string `json:"delivery_blocker,omitempty"`
+	ID                string `json:"id"`
+	Provider          string `json:"provider"`
+	Key               string `json:"key,omitempty"`
+	Name              string `json:"name"`
+	Status            string `json:"status"`
+	PID               int    `json:"pid,omitempty"`
+	Delivery          string `json:"delivery,omitempty"`
+	Admission         string `json:"admission,omitempty"`
+	Enrolled          bool   `json:"enrolled"`
+	Alias             string `json:"alias,omitempty"`
 }
 
 // HubClient calls the existing HTTPS /v2/rpc endpoint. A definite rejection

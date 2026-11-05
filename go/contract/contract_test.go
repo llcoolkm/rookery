@@ -4,6 +4,7 @@ package contract_test
 import (
 	"encoding/json"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -147,4 +148,31 @@ func TestMCPParity(t *testing.T) {
 func TestNativeRenderParity(t *testing.T) {
 	load(t)
 	t.Skip("TODO phase 2: compare Go renderer text byte-for-byte with delivery vectors")
+}
+
+// Snapshot serialization must retain null parents, zero hops and false receipts.
+func TestMessageRoundTrip(t *testing.T) {
+	b, err := os.ReadFile("testdata/contract.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw struct {
+		Delivery []struct{ Message map[string]any }
+	}
+	if err := json.Unmarshal(b, &raw); err != nil {
+		t.Fatal(err)
+	}
+	for i, c := range load(t).Delivery {
+		encoded, err := json.Marshal(c.Message)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got map[string]any
+		if err := json.Unmarshal(encoded, &got); err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(got, raw.Delivery[i].Message) {
+			t.Fatalf("%s: snapshot fields changed on round trip", c.Name)
+		}
+	}
 }
