@@ -2,7 +2,11 @@
 package contract_test
 
 import (
+	"bytes"
+	"context"
+	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"os"
 	"reflect"
 	"strings"
@@ -37,6 +41,10 @@ type vectors struct {
 	}
 	MCPFrames []struct {
 		Name      string
+		InputHex  string `json:"input_hex"`
+		Repeat    string
+		Count     int
+		Suffix    string
 		Responses []json.RawMessage
 	} `json:"mcp_frames"`
 	RequestIDs []struct {
@@ -152,12 +160,142 @@ func TestHubParity(t *testing.T) {
 	t.Skip("TODO phase 2: replay hub exchanges through Go HTTPS client and delivery machine")
 }
 func TestMCPParity(t *testing.T) {
-	load(t)
-	t.Skip("TODO phase 2: replay MCP requests through Go server and compare exact compact results")
+	v := load(t)
+	backend := &vectorBackend{values: map[string]any{}}
+	// The verbose rows are the baseline Client output. Compact vectors exercise
+	// the server transformation independently against the same Client snapshots.
+	for _, c := range v.MCP {
+		switch c.Name {
+		case "send_verbose", "message_status_verbose", "inbox_include_read":
+			var response struct {
+				Result struct{ Content []struct{ Text string } }
+			}
+			if err := json.Unmarshal(c.Response, &response); err != nil {
+				t.Fatal(err)
+			}
+			backend.values[c.Name] = decodeJSON(t, []byte(response.Result.Content[0].Text))
+		}
+	}
+	server := core.NewMCP(backend, nil)
+	for _, c := range v.MCP {
+		t.Run(c.Name, func(t *testing.T) {
+			backend.current = c.Name
+			request := decodeJSON(t, c.Request)
+			var got map[string]any
+			if c.Name == "missing_caller_identity" {
+				identity := core.NewMCP(nil, func(ctx context.Context, params map[string]any) (core.MCPBackend, error) {
+					_, err := core.CodexMetadataIdentity(params)
+					return backend, err
+				})
+				identity.Handle(context.Background(), map[string]any{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": map[string]any{"protocolVersion": "2025-06-18"}})
+				got = identity.Handle(context.Background(), request)
+			} else {
+				got = server.Handle(context.Background(), request)
+			}
+			raw, err := json.Marshal(got)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(decodeJSON(t, raw), decodeJSON(t, c.Response)) {
+				t.Fatalf("MCP response differs\ngot  %s\nwant %s", raw, c.Response)
+			}
+		})
+	}
+	for _, c := range v.MCPFrames {
+		t.Run("frame/"+c.Name, func(t *testing.T) {
+			frame, err := hex.DecodeString(c.InputHex)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if c.Repeat != "" {
+				frame = []byte(strings.Repeat(c.Repeat, c.Count) + c.Suffix)
+			}
+			var output bytes.Buffer
+			if err := core.NewMCP(backend, nil).Serve(context.Background(), bytes.NewReader(frame), &output); err != nil {
+				t.Fatal(err)
+			}
+			lines := bytes.Split(bytes.TrimSpace(output.Bytes()), []byte{'\n'})
+			if len(lines) != len(c.Responses) {
+				t.Fatalf("got %d responses, want %d", len(lines), len(c.Responses))
+			}
+			for i, line := range lines {
+				if !reflect.DeepEqual(decodeJSON(t, line), decodeJSON(t, c.Responses[i])) {
+					t.Fatalf("got %s want %s", line, c.Responses[i])
+				}
+			}
+		})
+	}
+}
+func decodeJSON(t *testing.T, raw []byte) any {
+	t.Helper()
+	var v any
+	d := json.NewDecoder(bytes.NewReader(raw))
+	d.UseNumber()
+	if err := d.Decode(&v); err != nil {
+		t.Fatal(err)
+	}
+	return v
+}
+
+type vectorBackend struct {
+	current string
+	values  map[string]any
+}
+
+func (b *vectorBackend) Identity(context.Context) (string, error) {
+	return "beta/codex:00000000-0000-4000-8000-000000000002", nil
+}
+func (b *vectorBackend) Invoke(ctx context.Context, op string, args map[string]any) (any, error) {
+	switch b.current {
+	case "peers", "peers_stale":
+		stale := b.current == "peers_stale"
+		first := map[string]any{"key": "alpha/claude:00000000-0000-4000-8000-000000000001", "status": "idle", "enrolled": true, "name": "Alpha", "alias": "alpha"}
+		if stale {
+			first["status"] = "unknown"
+			first["online"] = false
+		}
+		return map[string]any{"sessions": []any{first, map[string]any{"key": "beta/codex:00000000-0000-4000-8000-000000000002", "status": "busy", "enrolled": true, "online": false}, map[string]any{"key": "unlisted", "enrolled": false}}, "stale": stale}, nil
+	case "peers_missing":
+		return map[string]any{"sessions": []any{}, "detail": "helper has not connected yet"}, nil
+	case "send_compact", "send_verbose":
+		return b.values["send_verbose"], nil
+	case "send_queued":
+		return map[string]any{"status": "queued_local", "request_id": "01a3185c-6f40-7000-8000-000000000000", "id": "00000000-0000-4000-8000-000000000080", "detail": "saved locally; helper will upload when connected"}, nil
+	case "reply_compact", "followup_compact":
+		recipient := "alpha/claude:00000000-0000-4000-8000-000000000001"
+		kind := "reply"
+		id := "00000000-0000-4000-8000-000000000011"
+		parent := "00000000-0000-4000-8000-000000000010"
+		if b.current == "followup_compact" {
+			recipient = "beta/codex:00000000-0000-4000-8000-000000000002"
+			kind = "ask"
+			id = "00000000-0000-4000-8000-000000000012"
+			parent = "00000000-0000-4000-8000-000000000011"
+		}
+		return map[string]any{"id": id, "recipient": recipient, "kind": kind, "body": "body omitted", "sender": "sender omitted", "status": "pending", "received_by_host": false, "in_reply_to": parent}, nil
+	case "inbox_compact", "inbox_include_read", "inbox_peek":
+		return b.values["inbox_include_read"], nil
+	case "health_missing":
+		return map[string]any{"running": false, "connected": false, "detail": "helper has not started"}, nil
+	case "health":
+		return map[string]any{"running": true, "connected": true, "updated": json.Number("1800000000.0"), "stale": false}, nil
+	case "unknown_local":
+		return map[string]any{"id": args["message_id"], "status": "unknown_local"}, nil
+	case "message_status", "message_status_verbose", "legacy_tool":
+		return b.values["message_status_verbose"], nil
+	case "operation_error":
+		return nil, core.OperationError("session is not enrolled")
+	}
+	return nil, fmt.Errorf("unexpected invocation")
 }
 func TestNativeRenderParity(t *testing.T) {
-	load(t)
-	t.Skip("TODO phase 2: compare Go renderer text byte-for-byte with delivery vectors")
+	for _, c := range load(t).Delivery {
+		t.Run(c.Name, func(t *testing.T) {
+			if got := core.Render(c.Message); got != c.Text {
+				t.Fatalf("got %q want %q", got, c.Text)
+			}
+		})
+	}
 }
 
 // Snapshot serialization must retain null parents, zero hops and false receipts.
