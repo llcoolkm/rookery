@@ -136,6 +136,11 @@ type Files interface {
 // ServiceSpec contains no bearer credentials. Arguments may contain only public
 // options; configuration and credentials are read from protected files.
 type ServiceSpec struct {
+	// Optional target account and provider execution environment. Platform code
+	// resolves omitted values; credentials never belong in these fields.
+	Account    string
+	Home       string
+	SearchPath string
 	Executable string
 	Arguments  []string
 	StateDir   string

@@ -346,19 +346,29 @@ func TestListDescriptorRelativeMetadata(t *testing.T) {
 	}
 }
 
-func TestWSLInstallReportsIncompleteBootIntegration(t *testing.T) {
-	host, root := testHost(t)
-	ctx := context.Background()
-	svc := host.Service.(interface{ ConfigureBackend(string) error })
-	if e := svc.ConfigureBackend("wsl"); e != nil {
+func TestWSLInstallUsesIsolatedBootConfiguration(t *testing.T) {
+	svc, _, target, spec := testWSLService(t)
+	original := "[boot]\ncommand=existing\n[network]\nkey=value\n"
+	if e := os.WriteFile(target, []byte(original), 0600); e != nil {
 		t.Fatal(e)
 	}
-	if e := host.Service.Install(ctx, platform.ServiceSpec{Executable: "/native/program", StateDir: root}); e == nil || !strings.Contains(e.Error(), "automatic boot installation is unavailable") {
-		t.Fatal("WSL install claimed complete integration")
+	if e := svc.Install(context.Background(), spec); e != nil {
+		t.Fatal(e)
 	}
-	status, e := host.Service.Status(ctx)
-	if e != nil || status.Installed || status.Running || !strings.Contains(status.Detail, "boot integration requires") {
-		t.Fatal("WSL status hid incomplete startup integration")
+	content, e := os.ReadFile(target)
+	if e != nil || !strings.Contains(string(content), "command=existing; ") {
+		t.Fatal("boot command not installed")
+	}
+	backup, e := os.ReadFile(target + ".rookery-go.bak")
+	if e != nil || string(backup) != original {
+		t.Fatal("original configuration not backed up")
+	}
+	status, e := svc.Status(context.Background())
+	if e != nil || !status.Installed || status.Running {
+		t.Fatal("completed boot integration status incorrect")
+	}
+	if e = svc.Install(context.Background(), spec); e != nil {
+		t.Fatal(e)
 	}
 }
 
