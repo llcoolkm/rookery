@@ -606,3 +606,14 @@ func CodexMetadataIdentity(params map[string]any) (string, error) {
 	return "codex:" + id, nil
 }
 func canonicalIdentityID(id string) bool { _, err := RequestCreated(id); return err == nil }
+
+// AGYMetadataIdentity resolves only harness-injected metadata for this call.
+// Unlike optional explicit bindings, the observed AGY metadata must be exactly
+// canonical; missing values and UUID case changes fail closed.
+func AGYMetadataIdentity(meta CallMetadata) (string, error) {
+	var id string
+	if json.Unmarshal(meta["antigravity.google/conversation_id"], &id) != nil || id != strings.ToLower(id) || !canonicalIdentityID(id) {
+		return "", InvalidParams(AGYIdentityError)
+	}
+	return "agy:" + id, nil
+}

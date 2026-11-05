@@ -6,7 +6,9 @@ there is no hub rewrite in this plan. [contract.md](contract.md) defines the
 Python 0.3.1 baseline, including compact MCP results and irreversible delivery
 claims. Phase 1 established the contract and skeleton. Phase 2 now implements the Go
 core, Linux platform, Codex/Claude routes and CLI; isolated tests pass. Phase 2 passed isolated live Linux acceptance at `1685721`; Windows acceptance
-remains a separate gate.
+remains a separate gate. Phase 4 adds Linux AGY identity and attached endpoint
+lifecycle; native AGY delivery remains held pending a verified input route that
+keeps peer text out of process arguments.
 
 ## Phases and acceptance gates
 
@@ -32,9 +34,11 @@ remains a separate gate.
    cross-compilation or WSL. Demonstrate session identity, busy admission, owner
    checks, process reuse refusal and unknown-outcome handling.
 4. **AGY on Linux.** Port attached endpoints, credential confinement, process
-   pinning, endpoint lifecycle/fencing and parsed agentapi acceptance. Verify
-   parity for idle and busy conversations without credential borrowing or blind
-   retries. Windows AGY remains deferred until its own native acceptance gate.
+   pinning and endpoint lifecycle/fencing. Native submission and parsed agentapi
+   acceptance remain held until AGY documents a stdin or private-file input route
+   and the session-shell credential handoff passes review. Verify parity for idle
+   and busy conversations without credential borrowing or blind retries. Windows
+   AGY remains deferred until its own native acceptance gate.
 5. **Release 0.4.0.** Package native Linux and Windows binaries and document
    installation, migration and rollback. Keep the Python helper as fallback for
    one release. Release only after contract, native-platform, security and
@@ -294,8 +298,9 @@ execution on hosted runners and the live-server procedure below are unverified.
   delivery sequentially rather than using Python's independent long-poll sync
   thread. Large local snapshots incur whole-file transactions; high-volume and
   long-offline operation need additional performance validation.
-- **Deferred functionality.** AGY native attach/detach and hooks remain phase 4;
-  Windows runtime remains phase 3. Provider plugins, configuration migration,
+- **Deferred functionality.** Phase 4 adds Linux AGY attach/detach and hooks,
+  with native delivery held as described below. Windows runtime acceptance remains
+  a separate gate. Provider plugins, configuration migration,
   artifact packaging/signing and release remain outside phase 2.
 
 ### Live-server acceptance procedure (Claude runs this)
@@ -869,3 +874,113 @@ and accept OVERLAPPED allocations, byte counts and flags on the heap. Build
 caches were isolated and cleared between target groups to fit the writable
 storage quota. No real state, tokens or live hub were used. These compile gates
 do not establish native Windows runtime acceptance.
+
+
+## Phase 4 implementation status
+
+Linux AGY now has per-call MCP identity, independent attached-endpoint discovery,
+process pinning, authenticated local liveness checks, and `attach agy`,
+`detach agy` and `agy-hook`. Windows AGY remains unsupported. The Python hub and
+Python AGY implementation are unchanged. This is a lifecycle implementation,
+**not successful AGY native delivery acceptance**.
+
+The provider accepts only canonical
+`_meta["antigravity.google/conversation_id"]` on each call. An absent, malformed
+or noncanonical value fails closed with the existing AGY identity error. Explicit
+session binding continues to follow the common MCP contract. Discovery remains
+restricted by the Go helper's coexistence session allowlist. A live attached
+endpoint wins over explicit polling; detached, fenced, stale, future-dated or
+process-reused records cannot advertise busy admission. Attached capability and
+busy admission do not remove the native-delivery hold.
+
+Go uses private `agy-UUID.json` records and sibling lifecycle markers and sockets
+directly under Go state. Both AGY and endpoint process start/boot pins and a
+heartbeat no older than 20 seconds must match. Local ping authenticates the
+endpoint peer and checks the exact conversation. Socket locations derive from
+canonical IDs through platform capabilities; records carry no socket addresses,
+credentials or peer text. No Python AGY record or endpoint is reused. Long state
+paths fail closed if the Unix socket cannot fit; there is no runtime-directory
+fallback in this phase.
+
+Attach runs from the intended AGY conversation's own shell, with background and
+`--foreground` lifecycle modes and `--status` inspection. Top-level classification
+must succeed before attachment or hook prompts; unknown layouts and subagents
+fail closed. A repeated classification check precedes superseding another
+conversation in the same pinned AGY process. Private presence markers fence
+the old endpoint, which stops at its next lifecycle check. A per-conversation
+lifetime lock prevents reattachment from clearing its fence until it exits.
+Detach and supersession do not signal existing processes. Failed background
+startup terminates only the child that command just created. `detach agy --conversation UUID` writes a sticky marker so hooks stay
+quiet until explicit attach. Hook reminders respect a declined initial prompt,
+prior attachment and process resume. Hook payloads never grant permissions.
+
+`install agy` plans the provider's own MCP registration and a hooks/rules plugin;
+`--apply` performs the reviewed changes. MCP registration uses `agy mcp list`
+and `agy mcp add rookery-go`; the plugin and hook namespace is `rookery-go`.
+Existing Python `rookery` registration, plugin and grants are preserved. The
+plugin carries hooks and peer-mail rules, not a duplicate MCP server. AGY's
+space-separated listing cannot prove exact argument boundaries, so an existing
+`rookery-go` entry is preserved for operator inspection. Installer and hooks do
+not change permission grants or enroll conversations.
+
+### Native delivery is held
+
+Python invokes `agentapi send-message CONVERSATION TEXT`, placing peer text in
+argv. Master's standing rule prohibits this in Go on every OS. No documented
+stdin or private-file route has been verified. Go therefore returns held before
+native I/O and does not execute agentapi or send peer text over endpoint IPC.
+The endpoint serves lifecycle/liveness only. Hook output explains this hold;
+attaching is not a promise that peer messages will wake the conversation. AGY
+can still use the ordinary session-bound MCP tools and inbox.
+
+Neither the CSRF token nor language-server address is read or required by this
+held implementation. They are never recovered from `/proc` process environment
+or command lines, logged, put in argv, persisted in records or sent to the hub.
+AGY process ancestry uses process identity facilities without command-line
+inspection. Any future native delivery must receive credentials only from what
+AGY itself supplies to its own conversation shell, within the attached endpoint
+mechanism, and must keep peer text out of argv. No guessed RPC, token borrowing,
+Python endpoint fallback or automatic replay is authorized by this implementation.
+The provider has a source gate against direct `/proc` access and command execution.
+
+The endpoint does not invoke `get-conversation-metadata`. Its liveness and
+conversation-store checks do not establish that the intended conversation is
+still displayed, and they do not constitute parsed native acceptance. All
+outcome details stay fixed and value-free. Public test fixtures and docs contain
+synthetic identities only.
+
+### UNVERIFIED and deferred AGY behavior
+
+- A documented, version-pinned stdin or private-file route for peer text and its
+  exact correlated acceptance/error protocol. Native delivery stays held until
+  that evidence is implemented and reviewed.
+- AGY's real session-shell credential handoff, credential lifetime and confinement
+  when native delivery is enabled. No real credential was read for this phase.
+- Installed AGY metadata keys, hook payloads/events, plugin discovery, MCP listing
+  format and conversation-store/subagent layout. The Python baseline observes
+  these behaviors; fake tests do not establish a stable upstream API.
+- Real idle/busy delivery, exit/resume, same-PID conversation switches, late child
+  records, `/clear`, deliberate permission refusal (human “No”), and actual model
+  receipt. Lifecycle fakes cannot count as live native acceptance.
+- Conversation existence and TUI selection; no credential-bearing metadata query
+  runs in this revision. Long-path runtime-socket fallback remains unsupported.
+- Native Windows AGY identity, attach/detach, hooks, plugin installation, discovery
+  and delivery remain deferred and report unsupported.
+- Installed-harness, real-state and live-hub acceptance for phase 4, plus release
+  packaging and publication. No production state, tokens, sessions or live hub
+  are part of this task's validation.
+
+
+### Phase 4 validation
+
+The local phase 4 gates passed 323 Python tests; Linux `go vet ./...`,
+`go test ./...` and full `go test -race ./...`; Windows cross-vet and
+`go test -c` for all 12 target packages; cgo-disabled Linux and Windows builds;
+and the portable OS-import gate for both targets. AGY source tests prohibit
+provider process scraping and execution. Python-derived shared vectors cover
+per-call AGY identity and its pinned error text; Go-only hook/held wording is
+not a new Python compatibility promise. Lifecycle, installer and provider tests
+use synthetic processes, temporary state and fake native execution. Windows
+runtime and real AGY acceptance remain UNVERIFIED. Disposable compiler caches
+were reclaimed and build groups serialized to stay within the writable quota.
+Staged whitespace and added-line/new-file privacy checks were clean.

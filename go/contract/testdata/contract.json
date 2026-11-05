@@ -2771,5 +2771,91 @@
       "error": "hub does not recognise node alpha (HTTP 401): ask the hub operator to add this node's token hash; see docs/operations.md#adding-a-node",
       "retryable": true
     }
+  ],
+  "agy_identity": [
+    {
+      "name": "valid",
+      "params": {
+        "_meta": {
+          "antigravity.google/conversation_id": "00000000-0000-4000-8000-000000000001"
+        }
+      },
+      "actor": "agy:00000000-0000-4000-8000-000000000001"
+    },
+    {
+      "name": "switch",
+      "params": {
+        "_meta": {
+          "antigravity.google/conversation_id": "00000000-0000-4000-8000-000000000002"
+        }
+      },
+      "actor": "agy:00000000-0000-4000-8000-000000000002"
+    },
+    {
+      "name": "missing_metadata",
+      "params": {},
+      "error": "AGY caller identity unavailable or invalid. Reconnect Rookery from the intended AGY conversation."
+    },
+    {
+      "name": "tool_argument_identity",
+      "params": {
+        "arguments": {
+          "antigravity.google/conversation_id": "00000000-0000-4000-8000-000000000001"
+        }
+      },
+      "error": "AGY caller identity unavailable or invalid. Reconnect Rookery from the intended AGY conversation."
+    },
+    {
+      "name": "missing_key",
+      "params": {
+        "_meta": {
+          "threadId": "00000000-0000-4000-8000-000000000001"
+        }
+      },
+      "error": "AGY caller identity unavailable or invalid. Reconnect Rookery from the intended AGY conversation."
+    },
+    {
+      "name": "nonobject_metadata",
+      "params": {
+        "_meta": []
+      },
+      "error": "AGY caller identity unavailable or invalid. Reconnect Rookery from the intended AGY conversation."
+    },
+    {
+      "name": "null_id",
+      "params": {
+        "_meta": {
+          "antigravity.google/conversation_id": null
+        }
+      },
+      "error": "AGY caller identity unavailable or invalid. Reconnect Rookery from the intended AGY conversation."
+    },
+    {
+      "name": "number_id",
+      "params": {
+        "_meta": {
+          "antigravity.google/conversation_id": 42
+        }
+      },
+      "error": "AGY caller identity unavailable or invalid. Reconnect Rookery from the intended AGY conversation."
+    },
+    {
+      "name": "malformed_id",
+      "params": {
+        "_meta": {
+          "antigravity.google/conversation_id": "invalid"
+        }
+      },
+      "error": "AGY caller identity unavailable or invalid. Reconnect Rookery from the intended AGY conversation."
+    },
+    {
+      "name": "uppercase_id",
+      "params": {
+        "_meta": {
+          "antigravity.google/conversation_id": "ABCDEF00-0000-4000-8000-000000000001"
+        }
+      },
+      "error": "AGY caller identity unavailable or invalid. Reconnect Rookery from the intended AGY conversation."
+    }
   ]
 }

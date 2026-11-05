@@ -3,12 +3,12 @@ package helper
 
 import (
 	"context"
-	"errors"
 	"sort"
 
 	"github.com/llcoolkm/rookery/go/core"
 	"github.com/llcoolkm/rookery/go/platform"
 	"github.com/llcoolkm/rookery/go/provider"
+	"github.com/llcoolkm/rookery/go/provider/agy"
 	"github.com/llcoolkm/rookery/go/provider/claude"
 	"github.com/llcoolkm/rookery/go/provider/codex"
 )
@@ -22,7 +22,8 @@ type Registry struct {
 func NewRegistry(c provider.Config, h platform.Host) *Registry {
 	co, _ := codex.New(c, h)
 	cl, _ := claude.New(c, h)
-	return &Registry{Config: c, Host: h, Providers: map[string]provider.Provider{"codex": co, "claude": cl, "agy": agyStub{}}}
+	ag, _ := agy.New(c, h)
+	return &Registry{Config: c, Host: h, Providers: map[string]provider.Provider{"codex": co, "claude": cl, "agy": ag}}
 }
 func (r *Registry) Provider(name string) provider.Provider { return r.Providers[name] }
 func (r *Registry) Discover(ctx context.Context) ([]core.Session, map[string]string) {
@@ -102,7 +103,7 @@ func (r *Registry) Ready(s core.Session) bool {
 		return false
 	}
 	policy := p.Admission(s)
-	return policy == provider.AdmitBusy && (s.Status == "idle" || s.Status == "busy") || policy == provider.AdmitIdle && s.Status == "idle"
+	return policy == provider.AdmitBusy && (s.Status == "idle" || s.Status == "busy" || s.Provider == "agy" && s.Delivery == "attached") || policy == provider.AdmitIdle && s.Status == "idle"
 }
 func (r *Registry) Submit(ctx context.Context, s core.Session, m core.Message) (core.DeliveryResult, error) {
 	p := r.Provider(s.Provider)
@@ -122,22 +123,4 @@ func (r *Registry) Submit(ctx context.Context, s core.Session, m core.Message) (
 }
 func (r *Registry) NativeHooks() core.NativeHooks {
 	return core.NativeHooks{Discover: r.Discover, Ready: r.Ready, Submit: r.Submit}
-}
-
-type agyStub struct{}
-
-func (agyStub) Name() string { return "agy" }
-func (agyStub) Capabilities() provider.Capabilities {
-	return provider.Capabilities{Topology: "attached"}
-}
-func (agyStub) Admission(core.Session) provider.Admission { return provider.AdmitNone }
-func (agyStub) Identity(context.Context, core.CallMetadata) (string, error) {
-	return "", errors.New("AGY native provider unsupported; Linux phase 4 and Windows deferred")
-}
-func (agyStub) Discover(context.Context) ([]core.Session, error) { return []core.Session{}, nil }
-func (agyStub) Deliver(context.Context, core.Session, core.Message) (core.DeliveryResult, error) {
-	return core.DeliveryResult{Status: "held", Detail: "AGY native provider unsupported; Linux phase 4 and Windows deferred"}, nil
-}
-func (agyStub) Busy(context.Context, core.Session) (provider.BusyState, error) {
-	return provider.Unknown, nil
 }

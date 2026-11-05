@@ -246,8 +246,9 @@ after a possible write is uncertain. (`src/rookery/codex_adapter.py:93`,
 AGY credentials remain only in the session-launched attached endpoint. The helper
 sends bounded local frames, checks correlated response identity, and reports
 uncertain if acceptance is unknown. The endpoint checks peer UID; agentapi exit
-code alone is not an acceptance receipt. Go AGY is deferred until phase 4 on
-Linux, and later on Windows. (`src/rookery/agy_endpoint.py:1`,
+code alone is not an acceptance receipt. Go phase 4 implements Linux attached
+endpoint identity and lifecycle, but holds native delivery under the stricter
+security rules below. Windows AGY remains unsupported. (`src/rookery/agy_endpoint.py:1`,
 `src/rookery/agy_endpoint.py:311`, `src/rookery/agy_endpoint.py:361`,
 `src/rookery/agy_endpoint.py:412`.)
 
@@ -711,3 +712,66 @@ session's token. Discovery can report a live session from `agents --json`, but
 native delivery remains held with redacted local reason `auth_unverified` and
 no connection or token transmission. Synthetic test capabilities prove frame
 ordering only; they cannot authorize a production token source.
+
+
+## Go AGY attached endpoint boundary (phase 4)
+
+The AGY provider resolves each call independently from canonical
+`_meta["antigravity.google/conversation_id"]`; it MUST NOT use a cached
+conversation, tool arguments, artifact paths or credentials to infer identity.
+The fixed invalid-identity text remains the Python text cited above. Linux
+attached discovery uses only Go's private state, exact canonical filenames,
+bounded records, a nonfuture heartbeat at most 20 seconds old, live AGY and
+endpoint process pins, and an authenticated local ping for the same conversation.
+Admission may be busy only while that attached endpoint is live; polling is
+always none. Discovery never enrolls a session. Windows AGY operations report
+unsupported and never discover or submit a native session.
+
+AGY's language-server address and CSRF token MUST NEVER be read from `/proc`,
+including process `environ` or `cmdline`, logged, placed in process arguments,
+written outside the existing attached-endpoint mechanism, or transmitted to the
+hub. Neither provider discovery nor identity may invoke process-command-line
+inspection to recover them. Only AGY's own conversation shell may supply a
+future attached endpoint with credentials AGY itself provides. They MUST NOT be
+borrowed from another process, session, helper, hook payload or MCP call.
+
+Peer message text MUST NEVER enter arguments of a process started by Go Rookery.
+The Python baseline's `agentapi send-message CONVERSATION TEXT` invocation
+(`src/rookery/agy_endpoint.py`, `send_message`) violates this stricter boundary.
+No documented stdin or private-file input route has been verified for Go.
+Therefore Go AGY delivery MUST return a fixed, value-free held result before
+native I/O. It MUST NOT invoke agentapi, send peer text to an attached endpoint,
+or fall back to Python's endpoint to bypass this gate. A successful local ping
+establishes endpoint liveness only; it is not native input acceptance or model
+receipt. Attaching does not remove the delivery hold.
+
+Go's `attach agy`, `detach agy` and `agy-hook` retain those command names. The
+Go installation uses the `rookery-go` MCP and plugin namespace, independent of
+Python's `rookery` installation. Hook output describes the held route and must
+not promise that attachment enables delivery. No credential value is required
+or inspected while native delivery is held. Endpoint records, lifecycle markers
+and sockets live directly in Go state; socket handles derive from the canonical
+conversation ID rather than an address read from a record. Records contain no
+language-server address, CSRF token or peer text. Go does not import Python AGY
+records or connect to their endpoints. A state path too long for the private
+socket fails closed; Python's runtime-directory fallback is not implemented.
+
+Attach and hook lifecycle decisions require positive top-level-conversation
+classification. Unknown or subagent conversations cannot attach, prompt for
+attachment or supersede a top-level endpoint. Destructive supersession requires
+a repeated classification check; a delayed child record must fail it closed.
+Same-AGY-process conversation switches fence only records matching the owning
+process generation; the old endpoint withdraws on its next lifecycle check. Go
+uses private presence markers under a per-conversation lifetime lock. A later
+attachment can clear the fence only after the old endpoint releases that lock.
+Detach and supersession do not signal existing processes. Explicit detach stays sticky until explicit attach.
+A declined initial prompt stays quiet; a previously attached conversation may
+receive one reminder after its endpoint is lost or when resumed in a new pinned
+AGY process. These decisions never authorize tool permissions or enrollment.
+
+Conversation-store layout, hook payloads and metadata keys are observed Python
+compatibility assumptions, not a documented stable AGY API. Go does not run
+`get-conversation-metadata` while the credential handoff is unverified. Lifecycle
+and process checks cannot prove that a conversation is still shown in the TUI.
+Safe native delivery and actual idle/busy, exit/resume, switch and permission
+refusal behavior require separate evidence before this hold can be removed.

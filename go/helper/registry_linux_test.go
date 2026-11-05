@@ -149,3 +149,19 @@ func TestRestrictedDiscoveryDefaultsToNoSessions(t *testing.T) {
 		t.Fatal(rows, problems)
 	}
 }
+
+func TestAGYAttachedUnknownReadyRequiresLiveAdmission(t *testing.T) {
+	s := core.Session{Provider: "agy", ID: testID, Status: "unknown", Delivery: "attached"}
+	r := &Registry{Providers: map[string]provider.Provider{"agy": fakeProvider{name: "agy", policy: provider.AdmitNone}}}
+	if r.Ready(s) {
+		t.Fatal("unverified endpoint ready")
+	}
+	r.Providers["agy"] = fakeProvider{name: "agy", policy: provider.AdmitBusy}
+	if !r.Ready(s) {
+		t.Fatal("live attached AGY endpoint with unknown native status not ready")
+	}
+	s.Delivery = "polling"
+	if r.Ready(s) {
+		t.Fatal("polling AGY endpoint ready")
+	}
+}

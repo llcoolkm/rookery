@@ -22,7 +22,7 @@ from rookery.daemon import HubClient, render
 from rookery.core import Error
 from rookery.common import RemoteError
 from rookery.hub import Hub, Unavailable, create_app
-from rookery.mcp import Server, serve, MAX_LINE, codex_client_resolver
+from rookery.mcp import Server, serve, MAX_LINE, codex_client_resolver, agy_client_resolver, InvalidParams
 from rookery.local_store import Store
 from rookery.common import atomic
 from rookery.request_ids import new_request_id, request_created, REQUEST_WINDOW
@@ -158,6 +158,28 @@ def generate_vectors():
             vectors["local"].append({"name": "queued_send", "request": admitted, "response": queued,
                                      "imported": store.commands()[0], "spool_removed": not spool_path.exists()})
             _mcp_vectors(vectors, local_client, store, alpha, beta, ask, reply, followup, messages)
+
+            # Derived from the actual Python resolver, including its fixed error
+            # text. These are per-call metadata, never tool-argument identities.
+            resolver = agy_client_resolver(local_root)
+            vectors["agy_identity"] = []
+            cases = (("valid", {"_meta": {"antigravity.google/conversation_id": identifier(1)}}),
+                     ("switch", {"_meta": {"antigravity.google/conversation_id": identifier(2)}}),
+                     ("missing_metadata", {}),
+                     ("tool_argument_identity", {"arguments": {"antigravity.google/conversation_id": identifier(1)}}),
+                     ("missing_key", {"_meta": {"threadId": identifier(1)}}),
+                     ("nonobject_metadata", {"_meta": []}),
+                     ("null_id", {"_meta": {"antigravity.google/conversation_id": None}}),
+                     ("number_id", {"_meta": {"antigravity.google/conversation_id": 42}}),
+                     ("malformed_id", {"_meta": {"antigravity.google/conversation_id": "invalid"}}),
+                     ("uppercase_id", {"_meta": {"antigravity.google/conversation_id": "ABCDEF00-0000-4000-8000-000000000001"}}))
+            for name, params in cases:
+                case = {"name": name, "params": params}
+                try:
+                    case["actor"] = resolver(params).actor
+                except InvalidParams as exc:
+                    case["error"] = str(exc)
+                vectors["agy_identity"].append(case)
 
         finally:
             hub.close()

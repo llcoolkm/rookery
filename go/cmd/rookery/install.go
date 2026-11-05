@@ -25,8 +25,11 @@ type installEnvironment struct {
 
 func installWith(ctx context.Context, h platform.Host, root string, a arguments, env installEnvironment) (any, error) {
 	name := a.pos(0)
+	if name == "agy" {
+		return installAGYWith(ctx, h, root, a, env)
+	}
 	if name != "codex" && name != "claude" {
-		return nil, errors.New("install supports codex and claude; AGY is deferred to phase 4")
+		return nil, errors.New("install supports codex, claude and agy")
 	}
 	if name != "claude" && a.options["accept-inbound"] == "true" {
 		return nil, errors.New("--accept-inbound applies only to claude")

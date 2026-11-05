@@ -30,8 +30,8 @@ type arguments struct {
 
 func parse(args []string) (arguments, error) {
 	a := arguments{options: map[string]string{}}
-	bools := map[string]bool{"once": true, "peek": true, "allow-http-loopback": true, "apply": true, "accept-inbound": true, "dry-run": true, "detach": true, "receipt": true}
-	values := map[string]bool{"state-dir": true, "as": true, "node": true, "url": true, "token-file": true, "provider": true, "session": true, "to": true, "body": true, "kind": true, "ttl": true, "id": true, "limit": true, "alias": true, "pid": true, "name": true, "backend": true, "executable": true, "user": true, "path": true, "timeout": true, "session-allowlist": true}
+	bools := map[string]bool{"once": true, "peek": true, "allow-http-loopback": true, "apply": true, "accept-inbound": true, "dry-run": true, "detach": true, "receipt": true, "status": true, "foreground": true, "agy-ready": true}
+	values := map[string]bool{"state-dir": true, "as": true, "node": true, "url": true, "token-file": true, "provider": true, "session": true, "to": true, "body": true, "kind": true, "ttl": true, "id": true, "limit": true, "alias": true, "pid": true, "name": true, "backend": true, "executable": true, "user": true, "path": true, "timeout": true, "session-allowlist": true, "conversation": true}
 	for i := 0; i < len(args); i++ {
 		s := args[i]
 		if strings.HasPrefix(s, "--") {
@@ -110,6 +110,9 @@ func runPlatform(ctx context.Context, args []string) (any, error) {
 	root, _ := h.Paths.StateDir()
 	if e = core.ValidateGoState(ctx, h.Files, root); e != nil {
 		return nil, e
+	}
+	if a.command == "attach" || a.command == "detach" || a.command == "agy-hook" {
+		return agyCommand(ctx, h, root, a)
 	}
 	if a.command == "service" {
 		return serviceCommand(ctx, h, root, a)
@@ -337,7 +340,7 @@ func runPlatform(ctx context.Context, args []string) (any, error) {
 			configured = []string{"claude"}
 		}
 		out["busy_delivery"] = map[string]any{"configured": configured, "effective": out["busy_delivery"], "pending_restart": out["running"] != true || !samePolicy(out["busy_delivery"], configured)}
-		out["attachments"] = []any{}
+		out["attachments"] = agyPlatformStatus(ctx, h, root)
 		return out, nil
 	case "wait":
 		return waitCommand(ctx, client, a)

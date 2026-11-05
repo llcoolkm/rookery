@@ -1,6 +1,4 @@
-//go:build linux
-
-// Package agy will implement provider.Provider through platform.Host using a
-// session-attached endpoint. Only that endpoint holds harness credentials.
-// TODO phase 4 on Linux; native Windows AGY is deferred.
+// Package agy implements Linux conversation identity and discovery of independent
+// Go attached endpoints. Native submission is held until AGY documents a safe
+// stdin or file input route. The provider never obtains harness credentials.
 package agy

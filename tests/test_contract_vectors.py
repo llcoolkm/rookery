@@ -28,6 +28,13 @@ class ContractVectorsTests(unittest.TestCase):
         for name in ("expired_request", "future_request"):
             self.assertFalse(hub[name]["response"]["ok"])
 
+    def test_agy_identity_is_per_call_metadata_only(self):
+        cases = {case["name"]: case for case in self.vectors["agy_identity"]}
+        self.assertNotEqual(cases["valid"]["actor"], cases["switch"]["actor"])
+        for name in ("missing_metadata", "tool_argument_identity", "missing_key", "nonobject_metadata",
+                     "null_id", "number_id", "malformed_id", "uppercase_id"):
+            self.assertEqual(cases[name]["error"], "AGY caller identity unavailable or invalid. Reconnect Rookery from the intended AGY conversation.")
+
     def test_native_envelopes_cannot_forge_lines(self):
         for case in self.vectors["delivery"]:
             lines = case["text"].splitlines()
