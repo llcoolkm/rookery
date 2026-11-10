@@ -185,6 +185,66 @@ class HelperTests(unittest.TestCase):
         self.helper.store.apply([{'type': 'message', 'data': message}], 1)
         return message
 
+    def expired_outgoing(self, **fields):
+        message = {'id': str(uuid.uuid4()), 'sender': 'test/codex:' + self.session['id'],
+                   'recipient': 'remote/claude:' + str(uuid.uuid4()), 'kind': 'ask',
+                   'body': 'Please stop the build', 'expires': time.time(), 'status': 'expired',
+                   'detail': 'deadline passed before native submission; recipient was waiting on a dialog',
+                   'received_by_host': True, **fields}
+        self.helper.store.apply([{'type': 'message', 'data': copy.deepcopy(message)}], 1)
+        return message
+
+    def test_expired_outgoing_message_is_noticed_to_the_sender_once(self):
+        message = self.expired_outgoing()
+        self.helper.notify_expired()
+        self.submit.assert_called_once()
+        text = self.submit.call_args[0][1]
+        self.assertTrue(text.startswith('[Rookery notice'))
+        notice = json.loads(text.splitlines()[2])
+        self.assertEqual((notice['id'], notice['to']), (message['id'], message['recipient']))
+        self.assertIn('waiting on a dialog', notice['reason'])
+        self.helper.sessions[0]['status'] = 'idle'
+        self.helper.notify_expired()
+        self.submit.assert_called_once()
+        self.assertEqual(self.hub.calls, [])      # local only: nothing goes to the hub
+
+    def test_expiry_notice_waits_for_a_ready_sender_and_retries_a_hold(self):
+        self.expired_outgoing()
+        self.helper.sessions[0]['status'] = 'busy'
+        self.helper.notify_expired()
+        self.submit.assert_not_called()
+        self.helper.sessions[0]['status'] = 'idle'
+        self.submit.return_value = {'status': 'held', 'detail': 'not idle'}
+        self.helper.notify_expired()
+        self.submit.return_value = {'status': 'submitted', 'detail': 'accepted'}
+        self.helper.sessions[0]['status'] = 'idle'
+        self.helper.notify_expired()
+        self.assertEqual(self.submit.call_count, 2)
+        self.helper.sessions[0]['status'] = 'idle'
+        self.helper.notify_expired()
+        self.assertEqual(self.submit.call_count, 2)
+
+    def test_expiry_notice_crash_is_uncertain_and_not_repeated(self):
+        self.expired_outgoing()
+        class SimulatedProcessDeath(BaseException):
+            pass
+        self.submit.side_effect = SimulatedProcessDeath()
+        with self.assertRaises(SimulatedProcessDeath):
+            self.helper.notify_expired()
+        restarted = Helper(self.path, client=self.hub, discover=self.discover, submit=self.submit)
+        restarted.sessions = [copy.deepcopy(self.session)]
+        restarted.store.recover_attempts()
+        self.submit.side_effect = None
+        restarted.notify_expired()
+        self.assertEqual(self.submit.call_count, 1)
+
+    def test_no_expiry_notice_for_read_remote_or_pre_upgrade_mail(self):
+        self.expired_outgoing(read_at=time.time())
+        self.expired_outgoing(sender='remote/codex:' + str(uuid.uuid4()))
+        self.expired_outgoing(expires=self.helper.store.get('notices_since') - 1)
+        self.helper.notify_expired()
+        self.submit.assert_not_called()
+
     def test_lost_send_response_retries_same_id_after_helper_restart(self):
         client = Client(self.path, actor='test/codex:' + self.session['id'])
         mid = str(uuid.uuid4())

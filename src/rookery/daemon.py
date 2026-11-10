@@ -96,6 +96,19 @@ def render(message):
     return '\n'.join(lines)
 
 
+def render_expiry(message):
+    # A local notice about the session's own mail, never peer input. The body
+    # is cut short: it only identifies the message, it is not to be acted on.
+    body = message.get('body') or ''
+    notice = {'id':message['id'],'to':message['recipient'],'kind':message.get('kind'),
+              'body_start':body[:160]+('…' if len(body) > 160 else ''),
+              'reason':message.get('detail') or 'deadline passed before native submission'}
+    return ('[Rookery notice — from your local Rookery helper, not a peer]\n'
+            +'A message you sent expired undelivered; the recipient never received it.\n'
+            +json.dumps(notice,ensure_ascii=False)+'\n'
+            +'If it still matters, send it again as a new message. No tool call is required.')
+
+
 @contextlib.contextmanager
 def lock(path):
     fd = os.open(path/'daemon.lock',os.O_CREAT|os.O_RDWR|os.O_NOFOLLOW,0o600)
@@ -281,6 +294,40 @@ class Helper:
             if result.get('status') != 'held':
                 target['status'] = 'busy'
 
+    def notify_expired(self):
+        """Tell a local sender, once, that its message expired undelivered.
+
+        Same rules as delivery: only a ready session, re-checked just before
+        submission; an attempt is recorded first, so a crash mid-submission is
+        uncertain and never repeated; a hold types nothing and is retried.
+        """
+        node = self.config['node']
+        for message in self.store.expired_unnoticed(node):
+            target = next((s for s in self.sessions if f"{node}/{s['provider']}:{s['id']}"==message['sender']),None)
+            if not target or not providers.ready(target):
+                continue
+            self.store.start_notice(message['id'])
+            try:
+                pid = target.get('pid')
+                fresh,_ = self.discover()
+                live = next((s for s in fresh if s['provider']==target['provider'] and s['id']==target['id']),None)
+                index = self.sessions.index(target)
+                if live is None:
+                    self.sessions.pop(index)
+                else:
+                    self.sessions[index] = target = dict(live)
+                if not live or not providers.ready(live) or (pid and live.get('pid')!=pid):
+                    result = {'status':'held','detail':'session no longer ready; no input submitted'}
+                else:
+                    result = self.submit(live,render_expiry(message))
+                    if result.get('status') not in ('held','submitted','failed','uncertain'):
+                        result = {'status':'uncertain','detail':'unrecognized provider result'}
+            except Exception as exc:
+                result = {'status':'uncertain','detail':type(exc).__name__+': '+str(exc)[:500]}
+            self.store.finish_notice(message['id'],result)
+            if result.get('status') != 'held':
+                target['status'] = 'busy'
+
     def cycle(self):
         self.report_attempts()
         if time.monotonic()>=self.next_discovery:
@@ -291,6 +338,7 @@ class Helper:
             atomic(self.store.path/'directory.json',{**directory,'updated':time.time()})
             self.directory_dirty = False
         self.deliver()
+        self.notify_expired()
         if time.monotonic()>=self.next_prune:
             self.store.prune()
             self.next_prune = time.monotonic()+3600

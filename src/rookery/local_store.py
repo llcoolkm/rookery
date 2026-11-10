@@ -10,7 +10,7 @@ import sqlite3
 import time
 import uuid
 
-from .core import Error
+from .core import Error, SEND_TTL
 from .common import atomic
 
 
@@ -54,7 +54,11 @@ class Store:
                 CREATE INDEX IF NOT EXISTS message_inbox ON messages(recipient,updated);
                 CREATE TABLE IF NOT EXISTS attempts(claim_id TEXT PRIMARY KEY,message_id TEXT NOT NULL,result TEXT,reported INTEGER NOT NULL DEFAULT 0,created REAL NOT NULL);
                 CREATE INDEX IF NOT EXISTS attempt_pending ON attempts(reported);
+                CREATE TABLE IF NOT EXISTS notices(message_id TEXT PRIMARY KEY,result TEXT,created REAL NOT NULL);
             ''')
+            # Expiry notices cover only messages that expire after this store
+            # first supported them, so an upgrade does not replay old expiries.
+            db.execute('INSERT OR IGNORE INTO metadata VALUES (?,?)', ('notices_since', json.dumps(time.time())))
 
     @contextlib.contextmanager
     def connect(self):
@@ -175,6 +179,31 @@ class Store:
         with self.connect() as db:
             db.execute('UPDATE attempts SET result=? WHERE result IS NULL',
                        (json.dumps({'status':'uncertain','detail':'helper stopped during native submission; no automatic retry'}),))
+            db.execute('UPDATE notices SET result=? WHERE result IS NULL',
+                       (json.dumps({'status':'uncertain','detail':'helper stopped during notice submission; no automatic retry'}),))
+
+    def expired_unnoticed(self, node, limit=32):
+        """Sent from this node, expired without the recipient ever reading it,
+        and not yet noticed to the sender. Only expiries within one send
+        lifetime count; older ones are no longer worth interrupting for."""
+        since = max(self.get('notices_since', 0), time.time() - SEND_TTL)
+        with self.connect() as db:
+            return [json.loads(row[0]) for row in db.execute(
+                "SELECT data FROM messages WHERE status='expired' AND substr(sender,1,?)=? AND expires>=? "
+                "AND json_extract(data,'$.read_at') IS NULL AND id NOT IN (SELECT message_id FROM notices) "
+                "ORDER BY expires LIMIT ?", (len(node)+1, node+'/', since, limit))]
+
+    def start_notice(self, message_id):
+        with self.connect() as db:
+            db.execute('INSERT INTO notices VALUES (?,NULL,?)', (message_id, time.time()))
+
+    def finish_notice(self, message_id, result):
+        with self.connect() as db:
+            if result.get('status') == 'held':
+                # Nothing was typed: try again when the sender is ready.
+                db.execute('DELETE FROM notices WHERE message_id=?', (message_id,))
+            else:
+                db.execute('UPDATE notices SET result=? WHERE message_id=?', (json.dumps(result), message_id))
 
     def reports(self):
         with self.connect() as db:
@@ -189,6 +218,7 @@ class Store:
         with self.connect() as db:
             db.execute("DELETE FROM messages WHERE updated<? AND status IN ('submitted','acknowledged','replied','expired','cancelled','failed')",(cutoff,))
             db.execute('DELETE FROM attempts WHERE reported=1 AND created<?',(time.time()-30*86400,))
+            db.execute('DELETE FROM notices WHERE created<?',(time.time()-30*86400,))
         for file in (self.path/'results').glob('*.json'):
             if file.stat().st_mtime < cutoff:
                 file.unlink()

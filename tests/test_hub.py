@@ -420,6 +420,32 @@ class HubTests(unittest.TestCase):
             self.assertEqual(self.messages()[0]['status'], 'expired')
         self.assertEqual(self.send()['status'], 'pending')
 
+    def test_send_without_ttl_lives_twelve_hours(self):
+        message = self.send()
+        self.assertAlmostEqual(message['expires'] - message['created'], 43200, delta=1)
+
+    def test_expiry_records_recipient_state_and_last_hold(self):
+        waiting = self.send(ttl=1)
+        self.hub.call('laptop', 'publish', {'sessions': [dict(self.b, status='waiting')]})
+        with patch('rookery.hub.time.time', return_value=time.time() + 2):
+            expired = next(m for m in self.messages() if m['id'] == waiting['id'])
+        self.assertEqual(expired['status'], 'expired')
+        self.assertEqual(expired['expired_while'], 'waiting on a dialog')
+        self.assertIn('recipient was waiting on a dialog', expired['detail'])
+        self.hub.call('laptop', 'publish', {'sessions': [dict(self.b, status='idle')]})
+        held = self.send(ttl=5)
+        delivery = self.hub.call('laptop', 'claim')['delivery']
+        self.hub.call('laptop', 'result', dict(message_id=held['id'], claim_id=delivery['claim_id'],
+                                               status='held', detail='session no longer ready; no input submitted'))
+        with patch('rookery.hub.time.time', return_value=time.time() + 6):
+            expired = next(m for m in self.messages() if m['id'] == held['id'])
+        self.assertIn('recipient was idle; last hold: session no longer ready', expired['detail'])
+        offline = self.send(ttl=1)
+        from rookery.hub import FRESH
+        with patch('rookery.hub.time.time', return_value=time.time() + FRESH + 2):
+            expired = next(m for m in self.messages() if m['id'] == offline['id'])
+        self.assertEqual(expired['expired_while'], 'offline')
+
     def test_timestamped_request_expires_without_replaying_after_cache_prune(self):
         request_id = new_request_id()
         self.assertEqual(uuid.UUID(request_id).version, 7)

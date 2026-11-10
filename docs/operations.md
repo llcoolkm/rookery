@@ -461,12 +461,21 @@ not edit them.
 
 `send` defaults to a 12-hour lifetime: long enough to outlast a long turn or a
 dialog left open overnight, short enough that yesterday's request is not started
-as today's;
-`reply` defaults to 24 hours, because a reply carries a result and its recipient
-may be busy or briefly unreachable. `--ttl` sets seconds, at most 86400. Mail
-that expires before it was delivered or read stays in the recipient's `inbox`,
-marked expired, until it has been read once. Bodies are limited to 16 KiB of
-UTF-8. A thread holds at most six messages.
+as today's. `reply` defaults to 24 hours, because a reply carries a result and
+its recipient may be busy or briefly unreachable. `--ttl` sets seconds, at most
+86400. Mail that expires before it was delivered or read stays in the
+recipient's `inbox`, marked expired, until it has been read once.
+
+An expired message is never delivered late. Instead its `detail` says what the
+recipient was doing when it expired (`waiting on a dialog`, `busy`, `offline`,
+...), with the last hold reason the recipient's helper reported, and
+`expired_while` gives the state alone. The sender's helper then puts one short
+notice into the sending session, when that session is ready, naming the message
+and the reason, so the sender can resend or clear the blocker. The notice is a
+local helper message, not peer input; it is sent at most once, only for expiries
+newer than one send lifetime, and never repeated after an uncertain submission.
+
+Bodies are limited to 16 KiB of UTF-8. A thread holds at most six messages.
 
 ## Hub deployment
 

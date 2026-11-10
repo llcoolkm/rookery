@@ -144,7 +144,7 @@ class Client:
 
     @staticmethod
     def compact(msg):
-        return {k:msg[k] for k in ('id','request_id','sender','recipient','kind','body','status','received_by_host','read_at','detail','reply_id','in_reply_to','followup_id','expires') if k in msg}
+        return {k:msg[k] for k in ('id','request_id','sender','recipient','kind','body','status','received_by_host','read_at','detail','reply_id','in_reply_to','followup_id','expires','expired_while') if k in msg}
 
     def send(self, to, body, kind='ask', ttl=SEND_TTL, message_id=None):
         return self.compact(self.request('send',{'actor':self.identity(),'to':to,'body':body,'kind':kind,

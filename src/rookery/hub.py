@@ -279,7 +279,13 @@ class Hub:
             self._save(db, message)
         for row in db.execute("SELECT data FROM messages WHERE status IN ('pending','read') AND expires<=?", (now,)).fetchall():
             message = json.loads(row[0])
-            message.update(status="expired", detail="deadline passed before native submission")
+            # Record why it never went in, so the sender can act on it: the
+            # recipient's state at expiry and the last hold the helper reported.
+            state = self._recipient_state(db, message["recipient"], now)
+            detail = f"deadline passed before native submission; recipient was {state}"
+            if message.get("detail") and message["status"] == "pending":
+                detail += f"; last hold: {message['detail'][:512]}"
+            message.update(status="expired", detail=detail, expired_while=state)
             self._save(db, message)
         for row in db.execute("SELECT id,data FROM messages WHERE retained=1 AND terminal_at<? LIMIT 128", (now - RETENTION,)).fetchall():
             message = json.loads(row["data"])
@@ -340,6 +346,19 @@ class Hub:
         if len(rows) != 1:
             raise Error("alias must identify exactly one enrolled session")
         return rows[0][0]
+
+    @staticmethod
+    def _recipient_state(db, key, now):
+        """One short phrase for the recipient's state, as the directory sees it."""
+        row = db.execute("SELECT * FROM sessions WHERE key=?", (key,)).fetchone()
+        if row is None or not row["enrolled"]:
+            return "not enrolled"
+        if not (row["live"] and 0 <= now - row["updated"] <= FRESH):
+            return "offline"
+        data, enrollment = json.loads(row["data"]), json.loads(row["enrollment"])
+        if enrollment.get("pid") is not None and enrollment["pid"] != data.get("pid"):
+            return "enrolled for an earlier process"
+        return {"waiting": "waiting on a dialog", "busy": "busy", "idle": "idle"}.get(data.get("status"), "unknown")
 
     @staticmethod
     def _directory(db, node):
