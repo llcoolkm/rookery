@@ -13,9 +13,14 @@ import (
 )
 
 const (
-	Version       = "0.3.1"
-	MaxBodyBytes  = 16384
-	MaxHops       = 6
+	Version      = "0.3.1"
+	MaxBodyBytes = 16384
+	MaxHops      = 6
+	// Sends live 12 hours: long enough to outlast a long turn or a dialog
+	// left open overnight, short enough that yesterday's work is not started
+	// as today's. Replies carry results, not work, so they live a day.
+	SendTTL       = 43200
+	ReplyTTL      = 86400
 	RequestWindow = 7 * 24 * time.Hour
 	ClockSkew     = 5 * time.Minute
 )

@@ -7,7 +7,7 @@ from pathlib import Path
 import time
 import uuid
 
-from .core import Error, MAX_BYTES
+from .core import Error, MAX_BYTES, REPLY_TTL, SEND_TTL
 from .common import canonical_id
 from .local_store import admission_lock, state_path
 from .common import atomic, qualify, validate_url
@@ -64,10 +64,6 @@ def read_config(path):
     return config
 
 
-# Replies carry results, not work: a long life lets a busy or briefly
-# unreachable recipient still receive them. Sends (asks and informs) keep the
-# short default so stale work is not started late.
-REPLY_TTL = 86400
 
 class Client:
     def __init__(self, state_dir=None, actor=None):
@@ -114,7 +110,7 @@ class Client:
             body = data.get('body')
             if not isinstance(body, str) or not body.strip() or len(body.encode()) > MAX_BYTES:
                 raise Error(f'body must contain text and be at most {MAX_BYTES} UTF-8 bytes')
-            ttl = data.get('ttl', 3600)
+            ttl = data.get('ttl', SEND_TTL)
             if type(ttl) is not int or not 1 <= ttl <= 86400:
                 raise Error('ttl must be an integer between 1 and 86400 seconds')
             canonical_id(data['id'])
@@ -150,7 +146,7 @@ class Client:
     def compact(msg):
         return {k:msg[k] for k in ('id','request_id','sender','recipient','kind','body','status','received_by_host','read_at','detail','reply_id','in_reply_to','followup_id','expires') if k in msg}
 
-    def send(self, to, body, kind='ask', ttl=3600, message_id=None):
+    def send(self, to, body, kind='ask', ttl=SEND_TTL, message_id=None):
         return self.compact(self.request('send',{'actor':self.identity(),'to':to,'body':body,'kind':kind,
             'ttl':ttl,'expires':time.time()+ttl,'id':message_id or str(uuid.uuid4())}))
 

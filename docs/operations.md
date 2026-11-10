@@ -459,7 +459,9 @@ not edit them.
 
 ### Message lifetimes
 
-`send` defaults to a one-hour lifetime, so a stale request is not started late;
+`send` defaults to a 12-hour lifetime: long enough to outlast a long turn or a
+dialog left open overnight, short enough that yesterday's request is not started
+as today's;
 `reply` defaults to 24 hours, because a reply carries a result and its recipient
 may be busy or briefly unreachable. `--ttl` sets seconds, at most 86400. Mail
 that expires before it was delivered or read stays in the recipient's `inbox`,

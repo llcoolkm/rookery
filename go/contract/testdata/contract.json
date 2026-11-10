@@ -423,7 +423,7 @@
           "body": "Check once more.",
           "conversation": "00000000-0000-4000-8000-000000000010",
           "created": 1800000000.0,
-          "expires": 1800003600.0,
+          "expires": 1800043200.0,
           "hops": 2,
           "id": "00000000-0000-4000-8000-000000000012",
           "in_reply_to": "00000000-0000-4000-8000-000000000011",
@@ -433,7 +433,7 @@
           "requested_expires": null,
           "sender": "alpha/claude:00000000-0000-4000-8000-000000000001",
           "status": "pending",
-          "ttl": 3600,
+          "ttl": 43200,
           "updated": 1800000000.0,
           "v": 1
         }
@@ -500,7 +500,7 @@
           "body": "For information.",
           "conversation": "00000000-0000-4000-8000-000000000014",
           "created": 1800000000.0,
-          "expires": 1800003600.0,
+          "expires": 1800043200.0,
           "hops": 0,
           "id": "00000000-0000-4000-8000-000000000014",
           "in_reply_to": null,
@@ -510,7 +510,7 @@
           "requested_expires": null,
           "sender": "alpha/claude:00000000-0000-4000-8000-000000000001",
           "status": "pending",
-          "ttl": 3600,
+          "ttl": 43200,
           "updated": 1800000000.0,
           "v": 1
         }
@@ -727,7 +727,7 @@
               "body": "Check once more.",
               "conversation": "00000000-0000-4000-8000-000000000010",
               "created": 1800000000.0,
-              "expires": 1800003600.0,
+              "expires": 1800043200.0,
               "hops": 2,
               "id": "00000000-0000-4000-8000-000000000012",
               "in_reply_to": "00000000-0000-4000-8000-000000000011",
@@ -737,7 +737,7 @@
               "requested_expires": null,
               "sender": "alpha/claude:00000000-0000-4000-8000-000000000001",
               "status": "acknowledged",
-              "ttl": 3600,
+              "ttl": 43200,
               "updated": 1800000000.0,
               "v": 1
             },
@@ -746,7 +746,7 @@
               "conversation": "00000000-0000-4000-8000-000000000014",
               "created": 1800000000.0,
               "detail": "explicit operator cancellation",
-              "expires": 1800003600.0,
+              "expires": 1800043200.0,
               "hops": 0,
               "id": "00000000-0000-4000-8000-000000000014",
               "in_reply_to": null,
@@ -756,7 +756,7 @@
               "requested_expires": null,
               "sender": "alpha/claude:00000000-0000-4000-8000-000000000001",
               "status": "cancelled",
-              "ttl": 3600,
+              "ttl": 43200,
               "updated": 1800000000.0,
               "v": 1
             }
@@ -824,7 +824,7 @@
               "body": "Check once more.",
               "conversation": "00000000-0000-4000-8000-000000000010",
               "created": 1800000000.0,
-              "expires": 1800003600.0,
+              "expires": 1800043200.0,
               "hops": 2,
               "id": "00000000-0000-4000-8000-000000000012",
               "in_reply_to": "00000000-0000-4000-8000-000000000011",
@@ -834,7 +834,7 @@
               "requested_expires": null,
               "sender": "alpha/claude:00000000-0000-4000-8000-000000000001",
               "status": "acknowledged",
-              "ttl": 3600,
+              "ttl": 43200,
               "updated": 1800000000.0,
               "v": 1
             },
@@ -843,7 +843,7 @@
               "conversation": "00000000-0000-4000-8000-000000000014",
               "created": 1800000000.0,
               "detail": "explicit operator cancellation",
-              "expires": 1800003600.0,
+              "expires": 1800043200.0,
               "hops": 0,
               "id": "00000000-0000-4000-8000-000000000014",
               "in_reply_to": null,
@@ -853,7 +853,7 @@
               "requested_expires": null,
               "sender": "alpha/claude:00000000-0000-4000-8000-000000000001",
               "status": "cancelled",
-              "ttl": 3600,
+              "ttl": 43200,
               "updated": 1800000000.0,
               "v": 1
             }
@@ -1091,7 +1091,7 @@
           "body": "Hold before I/O.",
           "conversation": "00000000-0000-4000-8000-000000000019",
           "created": 1800000000.0,
-          "expires": 1800003600.0,
+          "expires": 1800043200.0,
           "hops": 0,
           "id": "00000000-0000-4000-8000-000000000019",
           "in_reply_to": null,
@@ -1101,7 +1101,7 @@
           "requested_expires": null,
           "sender": "alpha/claude:00000000-0000-4000-8000-000000000001",
           "status": "pending",
-          "ttl": 3600,
+          "ttl": 43200,
           "updated": 1800000000.0,
           "v": 1
         }
@@ -1128,7 +1128,7 @@
               "claim_id": "00000000-0000-4000-8000-000000000091",
               "conversation": "00000000-0000-4000-8000-000000000019",
               "created": 1800000000.0,
-              "expires": 1800003600.0,
+              "expires": 1800043200.0,
               "hops": 0,
               "id": "00000000-0000-4000-8000-000000000019",
               "in_reply_to": null,
@@ -1138,7 +1138,7 @@
               "requested_expires": null,
               "sender": "alpha/claude:00000000-0000-4000-8000-000000000001",
               "status": "dispatching",
-              "ttl": 3600,
+              "ttl": 43200,
               "updated": 1800000000.0,
               "v": 1
             },
@@ -1237,7 +1237,7 @@
               "body": "Check once more.",
               "conversation": "00000000-0000-4000-8000-000000000010",
               "created": 1800000000.0,
-              "expires": 1800003600.0,
+              "expires": 1800043200.0,
               "hops": 2,
               "id": "00000000-0000-4000-8000-000000000012",
               "in_reply_to": "00000000-0000-4000-8000-000000000011",
@@ -1247,7 +1247,7 @@
               "requested_expires": null,
               "sender": "alpha/claude:00000000-0000-4000-8000-000000000001",
               "status": "acknowledged",
-              "ttl": 3600,
+              "ttl": 43200,
               "updated": 1800000000.0,
               "v": 1
             },
@@ -1256,7 +1256,7 @@
               "conversation": "00000000-0000-4000-8000-000000000014",
               "created": 1800000000.0,
               "detail": "explicit operator cancellation",
-              "expires": 1800003600.0,
+              "expires": 1800043200.0,
               "hops": 0,
               "id": "00000000-0000-4000-8000-000000000014",
               "in_reply_to": null,
@@ -1266,7 +1266,7 @@
               "requested_expires": null,
               "sender": "alpha/claude:00000000-0000-4000-8000-000000000001",
               "status": "cancelled",
-              "ttl": 3600,
+              "ttl": 43200,
               "updated": 1800000000.0,
               "v": 1
             },
@@ -1276,7 +1276,7 @@
               "conversation": "00000000-0000-4000-8000-000000000019",
               "created": 1800000000.0,
               "detail": "",
-              "expires": 1800003600.0,
+              "expires": 1800043200.0,
               "hops": 0,
               "id": "00000000-0000-4000-8000-000000000019",
               "in_reply_to": null,
@@ -1286,7 +1286,7 @@
               "requested_expires": null,
               "sender": "alpha/claude:00000000-0000-4000-8000-000000000001",
               "status": "pending",
-              "ttl": 3600,
+              "ttl": 43200,
               "updated": 1800000000.0,
               "v": 1
             }
@@ -1315,7 +1315,7 @@
           "body": "Bounded thread.",
           "conversation": "00000000-0000-4000-8000-000000000020",
           "created": 1800000000.0,
-          "expires": 1800003600.0,
+          "expires": 1800043200.0,
           "hops": 0,
           "id": "00000000-0000-4000-8000-000000000020",
           "in_reply_to": null,
@@ -1325,7 +1325,7 @@
           "requested_expires": null,
           "sender": "alpha/claude:00000000-0000-4000-8000-000000000001",
           "status": "pending",
-          "ttl": 3600,
+          "ttl": 43200,
           "updated": 1800000000.0,
           "v": 1
         }
@@ -1351,7 +1351,7 @@
           "body": "Thread continuation.",
           "conversation": "00000000-0000-4000-8000-000000000020",
           "created": 1800000000.0,
-          "expires": 1800003600.0,
+          "expires": 1800043200.0,
           "hops": 1,
           "id": "00000000-0000-4000-8000-000000000021",
           "in_reply_to": "00000000-0000-4000-8000-000000000020",
@@ -1361,7 +1361,7 @@
           "requested_expires": null,
           "sender": "beta/codex:00000000-0000-4000-8000-000000000002",
           "status": "pending",
-          "ttl": 3600,
+          "ttl": 43200,
           "updated": 1800000000.0,
           "v": 1
         }
@@ -1387,7 +1387,7 @@
           "body": "Thread continuation.",
           "conversation": "00000000-0000-4000-8000-000000000020",
           "created": 1800000000.0,
-          "expires": 1800003600.0,
+          "expires": 1800043200.0,
           "hops": 2,
           "id": "00000000-0000-4000-8000-000000000022",
           "in_reply_to": "00000000-0000-4000-8000-000000000021",
@@ -1397,7 +1397,7 @@
           "requested_expires": null,
           "sender": "alpha/claude:00000000-0000-4000-8000-000000000001",
           "status": "pending",
-          "ttl": 3600,
+          "ttl": 43200,
           "updated": 1800000000.0,
           "v": 1
         }
@@ -1423,7 +1423,7 @@
           "body": "Thread continuation.",
           "conversation": "00000000-0000-4000-8000-000000000020",
           "created": 1800000000.0,
-          "expires": 1800003600.0,
+          "expires": 1800043200.0,
           "hops": 3,
           "id": "00000000-0000-4000-8000-000000000023",
           "in_reply_to": "00000000-0000-4000-8000-000000000022",
@@ -1433,7 +1433,7 @@
           "requested_expires": null,
           "sender": "beta/codex:00000000-0000-4000-8000-000000000002",
           "status": "pending",
-          "ttl": 3600,
+          "ttl": 43200,
           "updated": 1800000000.0,
           "v": 1
         }
@@ -1459,7 +1459,7 @@
           "body": "Thread continuation.",
           "conversation": "00000000-0000-4000-8000-000000000020",
           "created": 1800000000.0,
-          "expires": 1800003600.0,
+          "expires": 1800043200.0,
           "hops": 4,
           "id": "00000000-0000-4000-8000-000000000024",
           "in_reply_to": "00000000-0000-4000-8000-000000000023",
@@ -1469,7 +1469,7 @@
           "requested_expires": null,
           "sender": "alpha/claude:00000000-0000-4000-8000-000000000001",
           "status": "pending",
-          "ttl": 3600,
+          "ttl": 43200,
           "updated": 1800000000.0,
           "v": 1
         }
@@ -1495,7 +1495,7 @@
           "body": "Thread continuation.",
           "conversation": "00000000-0000-4000-8000-000000000020",
           "created": 1800000000.0,
-          "expires": 1800003600.0,
+          "expires": 1800043200.0,
           "hops": 5,
           "id": "00000000-0000-4000-8000-000000000025",
           "in_reply_to": "00000000-0000-4000-8000-000000000024",
@@ -1505,7 +1505,7 @@
           "requested_expires": null,
           "sender": "beta/codex:00000000-0000-4000-8000-000000000002",
           "status": "pending",
-          "ttl": 3600,
+          "ttl": 43200,
           "updated": 1800000000.0,
           "v": 1
         }
@@ -1617,7 +1617,7 @@
         "body": "Check once more.",
         "conversation": "00000000-0000-4000-8000-000000000010",
         "created": 1800000000.0,
-        "expires": 1800003600.0,
+        "expires": 1800043200.0,
         "hops": 2,
         "id": "00000000-0000-4000-8000-000000000012",
         "in_reply_to": "00000000-0000-4000-8000-000000000011",
@@ -1627,7 +1627,7 @@
         "requested_expires": null,
         "sender": "alpha/claude:00000000-0000-4000-8000-000000000001",
         "status": "pending",
-        "ttl": 3600,
+        "ttl": 43200,
         "updated": 1800000000.0,
         "v": 1
       },
@@ -1647,7 +1647,7 @@
         "body": "For information.",
         "conversation": "00000000-0000-4000-8000-000000000014",
         "created": 1800000000.0,
-        "expires": 1800003600.0,
+        "expires": 1800043200.0,
         "hops": 0,
         "id": "00000000-0000-4000-8000-000000000014",
         "in_reply_to": null,
@@ -1657,7 +1657,7 @@
         "requested_expires": null,
         "sender": "alpha/claude:00000000-0000-4000-8000-000000000001",
         "status": "pending",
-        "ttl": 3600,
+        "ttl": 43200,
         "updated": 1800000000.0,
         "v": 1
       },
@@ -1677,7 +1677,7 @@
         "conversation": "00000000-0000-4000-8000-000000000019",
         "created": 1800000000.0,
         "detail": "",
-        "expires": 1800003600.0,
+        "expires": 1800043200.0,
         "hops": 0,
         "id": "00000000-0000-4000-8000-000000000019",
         "in_reply_to": null,
@@ -1687,7 +1687,7 @@
         "requested_expires": null,
         "sender": "alpha/claude:00000000-0000-4000-8000-000000000001",
         "status": "pending",
-        "ttl": 3600,
+        "ttl": 43200,
         "updated": 1800000000.0,
         "v": 1
       },
@@ -1798,7 +1798,7 @@
                     "type": "integer",
                     "minimum": 1,
                     "maximum": 86400,
-                    "default": 3600
+                    "default": 43200
                   },
                   "verbose": {
                     "type": "boolean"
@@ -2004,8 +2004,8 @@
           "to": "beta",
           "body": "Review.",
           "kind": "ask",
-          "ttl": 3600,
-          "expires": 1800003600.0,
+          "ttl": 43200,
+          "expires": 1800043200.0,
           "id": "00000000-0000-4000-8000-000000000080",
           "_request_id": "01a3185c-6b58-7000-8000-000000000000"
         },
@@ -2046,8 +2046,8 @@
           "to": "beta",
           "body": "queued",
           "kind": "ask",
-          "ttl": 3600,
-          "expires": 1800003600.0,
+          "ttl": 43200,
+          "expires": 1800043200.0,
           "id": "00000000-0000-4000-8000-000000000080",
           "_request_id": "01a3185c-6f40-7000-8000-000000000000"
         },
@@ -2089,8 +2089,8 @@
           "to": "beta",
           "body": "Review.",
           "kind": "ask",
-          "ttl": 3600,
-          "expires": 1800003600.0,
+          "ttl": 43200,
+          "expires": 1800043200.0,
           "id": "00000000-0000-4000-8000-000000000080",
           "_request_id": "01a3185c-7328-7000-8000-000000000000"
         },
@@ -2197,7 +2197,7 @@
           "content": [
             {
               "type": "text",
-              "text": "[{\"id\":\"00000000-0000-4000-8000-000000000012\",\"sender\":\"alpha/claude:00000000-0000-4000-8000-000000000001\",\"recipient\":\"beta/codex:00000000-0000-4000-8000-000000000002\",\"kind\":\"ask\",\"body\":\"Check once more.\",\"status\":\"pending\",\"received_by_host\":false,\"read_at\":null,\"in_reply_to\":\"00000000-0000-4000-8000-000000000011\",\"expires\":1800003600.0},{\"id\":\"00000000-0000-4000-8000-000000000010\",\"from\":\"alpha/claude:00000000-0000-4000-8000-000000000001\",\"kind\":\"ask\",\"status\":\"read\",\"read_at\":1800000000.0,\"body_omitted\":true}]"
+              "text": "[{\"id\":\"00000000-0000-4000-8000-000000000012\",\"sender\":\"alpha/claude:00000000-0000-4000-8000-000000000001\",\"recipient\":\"beta/codex:00000000-0000-4000-8000-000000000002\",\"kind\":\"ask\",\"body\":\"Check once more.\",\"status\":\"pending\",\"received_by_host\":false,\"read_at\":null,\"in_reply_to\":\"00000000-0000-4000-8000-000000000011\",\"expires\":1800043200.0},{\"id\":\"00000000-0000-4000-8000-000000000010\",\"from\":\"alpha/claude:00000000-0000-4000-8000-000000000001\",\"kind\":\"ask\",\"status\":\"read\",\"read_at\":1800000000.0,\"body_omitted\":true}]"
             }
           ]
         }
@@ -2241,7 +2241,7 @@
           "content": [
             {
               "type": "text",
-              "text": "[{\"id\":\"00000000-0000-4000-8000-000000000012\",\"sender\":\"alpha/claude:00000000-0000-4000-8000-000000000001\",\"recipient\":\"beta/codex:00000000-0000-4000-8000-000000000002\",\"kind\":\"ask\",\"body\":\"Check once more.\",\"status\":\"pending\",\"received_by_host\":false,\"read_at\":null,\"in_reply_to\":\"00000000-0000-4000-8000-000000000011\",\"expires\":1800003600.0},{\"id\":\"00000000-0000-4000-8000-000000000010\",\"sender\":\"alpha/claude:00000000-0000-4000-8000-000000000001\",\"recipient\":\"beta/codex:00000000-0000-4000-8000-000000000002\",\"kind\":\"ask\",\"body\":\"Review “alpha”.\\nSecond line  \",\"status\":\"read\",\"received_by_host\":true,\"read_at\":1800000000.0,\"detail\":\"accepted by provider\",\"reply_id\":\"00000000-0000-4000-8000-000000000011\",\"in_reply_to\":null,\"expires\":1800003600.0}]"
+              "text": "[{\"id\":\"00000000-0000-4000-8000-000000000012\",\"sender\":\"alpha/claude:00000000-0000-4000-8000-000000000001\",\"recipient\":\"beta/codex:00000000-0000-4000-8000-000000000002\",\"kind\":\"ask\",\"body\":\"Check once more.\",\"status\":\"pending\",\"received_by_host\":false,\"read_at\":null,\"in_reply_to\":\"00000000-0000-4000-8000-000000000011\",\"expires\":1800043200.0},{\"id\":\"00000000-0000-4000-8000-000000000010\",\"sender\":\"alpha/claude:00000000-0000-4000-8000-000000000001\",\"recipient\":\"beta/codex:00000000-0000-4000-8000-000000000002\",\"kind\":\"ask\",\"body\":\"Review “alpha”.\\nSecond line  \",\"status\":\"read\",\"received_by_host\":true,\"read_at\":1800000000.0,\"detail\":\"accepted by provider\",\"reply_id\":\"00000000-0000-4000-8000-000000000011\",\"in_reply_to\":null,\"expires\":1800003600.0}]"
             }
           ]
         }
@@ -2285,7 +2285,7 @@
           "content": [
             {
               "type": "text",
-              "text": "[{\"id\":\"00000000-0000-4000-8000-000000000012\",\"sender\":\"alpha/claude:00000000-0000-4000-8000-000000000001\",\"recipient\":\"beta/codex:00000000-0000-4000-8000-000000000002\",\"kind\":\"ask\",\"body\":\"Check once more.\",\"status\":\"pending\",\"received_by_host\":false,\"read_at\":null,\"in_reply_to\":\"00000000-0000-4000-8000-000000000011\",\"expires\":1800003600.0},{\"id\":\"00000000-0000-4000-8000-000000000010\",\"from\":\"alpha/claude:00000000-0000-4000-8000-000000000001\",\"kind\":\"ask\",\"status\":\"read\",\"read_at\":1800000000.0,\"body_omitted\":true}]"
+              "text": "[{\"id\":\"00000000-0000-4000-8000-000000000012\",\"sender\":\"alpha/claude:00000000-0000-4000-8000-000000000001\",\"recipient\":\"beta/codex:00000000-0000-4000-8000-000000000002\",\"kind\":\"ask\",\"body\":\"Check once more.\",\"status\":\"pending\",\"received_by_host\":false,\"read_at\":null,\"in_reply_to\":\"00000000-0000-4000-8000-000000000011\",\"expires\":1800043200.0},{\"id\":\"00000000-0000-4000-8000-000000000010\",\"from\":\"alpha/claude:00000000-0000-4000-8000-000000000001\",\"kind\":\"ask\",\"status\":\"read\",\"read_at\":1800000000.0,\"body_omitted\":true}]"
             }
           ]
         }
@@ -2485,8 +2485,8 @@
           "to": "beta",
           "body": "reject",
           "kind": "ask",
-          "ttl": 3600,
-          "expires": 1800003600.0,
+          "ttl": 43200,
+          "expires": 1800043200.0,
           "id": "00000000-0000-4000-8000-000000000080",
           "_request_id": "01a3185c-a208-7000-8000-000000000000"
         },

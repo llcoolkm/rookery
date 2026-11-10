@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- `send` defaults to a 12-hour lifetime (was one hour) in the Python and Go
+  clients, the CLI, the MCP `send` tool and the hub. `reply` stays at 24 hours.
+  A recipient that is busy for a long turn or held by an open dialog no longer
+  loses mail after an hour.
+
 ## 0.3.1
 
 Reduce the tokens Rookery puts in front of a model. Client methods, the CLI, the

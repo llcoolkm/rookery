@@ -22,7 +22,7 @@ import tempfile
 import uuid
 from urllib.parse import parse_qs
 
-from .core import Error, MAX_BYTES, MAX_HOPS
+from .core import Error, MAX_BYTES, MAX_HOPS, SEND_TTL
 from .common import NODE, address, canonical_id, owned
 from .request_ids import CLOCK_SKEW, REQUEST_WINDOW, request_created
 
@@ -563,7 +563,7 @@ class Hub:
             if op == "reply" and (parent is None or parent["recipient"] != actor):
                 raise Error("only original recipient can reply")
             recipient = parent["sender"] if parent else self._resolve(db, data["to"])
-            mid, ttl = canonical_id(data["id"]), integer(data.get("ttl", 3600), 1, 86400)
+            mid, ttl = canonical_id(data["id"]), integer(data.get("ttl", SEND_TTL), 1, 86400)
             # Answering a reply is a follow-up: a new ask in the same thread.
             followup = parent is not None and parent["kind"] == "reply"
             kind = ("ask" if followup else "reply") if parent else data.get("kind", "ask")

@@ -9,7 +9,7 @@ from importlib.metadata import PackageNotFoundError, version
 import os
 import sys
 
-from .core import Error
+from .core import Error, SEND_TTL
 
 try:
     PACKAGE_VERSION = version("rookery-agents")
@@ -50,7 +50,7 @@ TOOLS = [
     _tool("send", "Send work within existing user-authorized delegation, or information.",
           {"to": _TEXT, "body": _TEXT,
            "kind": {"type": "string", "enum": ["ask", "inform"], "default": "ask"},
-           "ttl": {"type": "integer", "minimum": 1, "maximum": 86400, "default": 3600},
+           "ttl": {"type": "integer", "minimum": 1, "maximum": 86400, "default": SEND_TTL},
            "verbose": {"type": "boolean"}},
           ("to", "body")),
     _tool("reply", "Reply to a received ask, or answer a reply with one follow-up ask in the same thread; do not create acknowledgment loops.",

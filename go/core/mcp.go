@@ -129,7 +129,7 @@ func MCPTools() []map[string]any {
 	boolean := map[string]any{"type": "boolean"}
 	return []map[string]any{
 		tool("peers", "List enrolled peers and their availability.", nil, nil, true),
-		tool("send", "Send work within existing user-authorized delegation, or information.", map[string]any{"to": text, "body": text, "kind": map[string]any{"type": "string", "enum": []string{"ask", "inform"}, "default": "ask"}, "ttl": map[string]any{"type": "integer", "minimum": 1, "maximum": 86400, "default": 3600}, "verbose": boolean}, []string{"to", "body"}, false),
+		tool("send", "Send work within existing user-authorized delegation, or information.", map[string]any{"to": text, "body": text, "kind": map[string]any{"type": "string", "enum": []string{"ask", "inform"}, "default": "ask"}, "ttl": map[string]any{"type": "integer", "minimum": 1, "maximum": 86400, "default": SendTTL}, "verbose": boolean}, []string{"to", "body"}, false),
 		tool("reply", "Reply to a received ask, or answer a reply with one follow-up ask in the same thread; do not create acknowledgment loops.", map[string]any{"message_id": text, "body": text, "verbose": boolean}, []string{"message_id", "body"}, false),
 		tool("inbox", "Fetch open peer messages and suppress later native delivery of pending messages. Already-read rows omit the body unless include_read is set. Set peek for non-consuming inspection.", map[string]any{"limit": map[string]any{"type": "integer", "minimum": 1, "maximum": 100, "default": 20}, "peek": boolean, "include_read": boolean}, nil, false),
 		tool("status", "Inspect messaging health or the delivery state of one message.", map[string]any{"message_id": text, "verbose": boolean}, nil, true),

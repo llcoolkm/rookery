@@ -3,7 +3,7 @@ import argparse
 import json
 import os
 import sys
-from .core import Error
+from .core import Error, REPLY_TTL, SEND_TTL
 
 
 def parser():
@@ -27,7 +27,7 @@ def parser():
         else:
             s.add_argument("message_id")
         s.add_argument("--body", required=True, help="text or - to read stdin")
-        s.add_argument("--ttl", type=int, default=None, help="seconds; default 3600 for send, 86400 for reply")
+        s.add_argument("--ttl", type=int, default=None, help="seconds; default 43200 (12 h) for send, 86400 (24 h) for reply")
         s.add_argument("--id", dest="message_id_override", help="UUID idempotency key")
     a = sub.add_parser("ack")
     a.add_argument("message_id")
@@ -183,8 +183,8 @@ def unified_run(args,path):
     if command in ('send','reply'):
         body = sys.stdin.read() if args.body=='-' else args.body
         if command == 'send':
-            return client.send(args.to,body,args.kind,3600 if args.ttl is None else args.ttl,args.message_id_override)
-        return client.reply(args.message_id,body,86400 if args.ttl is None else args.ttl,args.message_id_override)
+            return client.send(args.to,body,args.kind,SEND_TTL if args.ttl is None else args.ttl,args.message_id_override)
+        return client.reply(args.message_id,body,REPLY_TTL if args.ttl is None else args.ttl,args.message_id_override)
     if command == 'ack':
         return client.ack(args.message_id)
     if command == 'wait':

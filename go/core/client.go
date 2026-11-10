@@ -215,9 +215,9 @@ func (c *Client) Invoke(ctx context.Context, op string, args map[string]any) (an
 				return nil, errors.New("ttl must be an integer between 1 and 86400 seconds")
 			}
 		}
-		ttl := intArg(args, "ttl", 3600)
+		ttl := intArg(args, "ttl", SendTTL)
 		if op == "reply" {
-			ttl = intArg(args, "ttl", 86400)
+			ttl = intArg(args, "ttl", ReplyTTL)
 		}
 		id := stringArg(args, "id", "")
 		if id == "" {

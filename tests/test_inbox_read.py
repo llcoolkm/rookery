@@ -218,12 +218,12 @@ class InboxReadTests(unittest.TestCase):
             self.helper.sync_once()
             self.assertEqual(self.client.inbox(), [])
 
-    def test_replies_default_to_a_day_and_asks_to_an_hour(self):
+    def test_replies_default_to_a_day_and_sends_to_twelve_hours(self):
         from rookery import client as client_module
         self.assertEqual(client_module.REPLY_TTL, 86400)
         import inspect
         self.assertEqual(inspect.signature(Client.reply).parameters['ttl'].default, 86400)
-        self.assertEqual(inspect.signature(Client.send).parameters['ttl'].default, 3600)
+        self.assertEqual(inspect.signature(Client.send).parameters['ttl'].default, 43200)
 
     def test_later_read_does_not_downgrade_native_or_model_states(self):
         for status in ('submitted', 'uncertain', 'failed', 'acknowledged', 'replied'):
