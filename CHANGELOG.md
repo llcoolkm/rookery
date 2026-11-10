@@ -1,26 +1,29 @@
 # Changelog
 
-## Unreleased
+## 0.3.2
 
-- `send` defaults to a 12-hour lifetime (was one hour) in the Python and Go
-  clients, the CLI, the MCP `send` tool and the hub. `reply` stays at 24 hours.
-  A recipient that is busy for a long turn or held by an open dialog no longer
-  loses mail after an hour.
+Mail no longer expires silently, and new sessions no longer start unreachable.
+The hub protocol is unchanged apart from the added fields below; 0.3.1 helpers
+keep working against a 0.3.2 hub.
+
+- `send` defaults to a 12-hour lifetime (was one hour) in the client, the CLI,
+  the MCP `send` tool and the hub. `reply` stays at 24 hours.
 - Expired messages say why: `detail` names the recipient's state at expiry
   (`waiting on a dialog`, `busy`, `offline`, ...) and the last hold reason;
-  `expired_while` gives the state alone. The Python helper puts one notice
+  `expired_while` gives the state alone. The sender's helper puts one notice
   into the sending session when its message expired undelivered.
-- `rookery auto-enroll on|off` (Python helper) enrolls every discovered
-  session. The hub records `disable`, lists it as `disabled`, and such a
+- `rookery auto-enroll on|off` enrolls every session the helper discovers (off
+  by default, applied at the next discovery, kept by `configure`, shown by
+  `doctor`). The hub records `disable` and lists it as `disabled`; a disabled
   session is never auto-enrolled.
 - The hub forgets sessions unseen for seven days, enrolled or not; aliased and
   disabled sessions are kept.
 - Enrollment errors name the session, say whether sender or recipient, and give
   the next step.
-- Go helper: `rookery auto-enroll on|off` enrolls every session the helper
-  discovers (off by default, read at each discovery, kept by `configure`,
-  shown by `doctor`). A session the hub reports as disabled is never
-  auto-enrolled. Needs a hub that reports `disabled`.
+- The repository now includes the experimental native Go helper (`go/`, see
+  `docs/go-port.md`). It supports `send` defaults, `auto-enroll` and the
+  `disabled` marker, but does not yet post expiry notices. Releases ship no Go
+  binaries.
 
 ## 0.3.1
 

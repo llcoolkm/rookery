@@ -157,7 +157,7 @@ Install the wheel with uv, selecting the interpreter explicitly.
 earlier in PATH may be older:
 
 ```sh
-uv tool install --python /usr/bin/python3 ./rookery_agents-0.3.1-py3-none-any.whl
+uv tool install --python /usr/bin/python3 ./rookery_agents-0.3.2-py3-none-any.whl
 ```
 
 For a dedicated environment instead of `uv tool`:
@@ -165,7 +165,7 @@ For a dedicated environment instead of `uv tool`:
 ```sh
 uv venv --python /usr/bin/python3 "$HOME/.local/share/rookery/venv"
 uv pip install --python "$HOME/.local/share/rookery/venv/bin/python" \
-  ./rookery_agents-0.3.1-py3-none-any.whl
+  ./rookery_agents-0.3.2-py3-none-any.whl
 export PATH="$HOME/.local/share/rookery/venv/bin:$PATH"
 ```
 
@@ -616,9 +616,9 @@ sudo systemctl enable --now rookery-hub.service
 
 The repository's Dockerfile builds a hub image that runs as UID 10001 with a
 volume at `/data`; release builds publish it as `ghcr.io/llcoolkm/rookery`.
-Tags are the release versions with a `v` prefix, such as `v0.3.1`; there is no
+Tags are the release versions with a `v` prefix, such as `v0.3.2`; there is no
 `latest` tag. Pin a version, and preferably the digest
-(`ghcr.io/llcoolkm/rookery:v0.3.1@sha256:...`), so an update is a deliberate
+(`ghcr.io/llcoolkm/rookery:v0.3.2@sha256:...`), so an update is a deliberate
 change. Inside the container the listeners must bind all interfaces; publish
 them on the host's loopback only:
 
@@ -629,7 +629,7 @@ docker run -d --name rookery-hub --restart unless-stopped \
   -v rookery-hub-data:/data \
   -v /etc/rookery-hub/tokens.json:/run/rookery/tokens.json:ro \
   -p 127.0.0.1:8787:8787 -p 127.0.0.1:8788:8788 \
-  ghcr.io/llcoolkm/rookery:v0.3.1 \
+  ghcr.io/llcoolkm/rookery:v0.3.2 \
   hub serve --db /data/state/hub.sqlite3 --tokens /run/rookery/tokens.json \
   --listen 0.0.0.0:8787 --metrics-listen 0.0.0.0:8788
 ```
