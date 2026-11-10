@@ -144,6 +144,7 @@ func runPlatform(ctx context.Context, args []string) (any, error) {
 			}
 			c.BusyDelivery = old.BusyDelivery
 			c.SessionAllowlist = old.SessionAllowlist
+			c.AutoEnroll = old.AutoEnroll
 		} else if !errors.Is(e, fs.ErrNotExist) {
 			return nil, errors.New("invalid private configuration")
 		}
@@ -207,6 +208,16 @@ func runPlatform(ctx context.Context, args []string) (any, error) {
 		}
 		return map[string]any{"busy_delivery": config.BusyDelivery, "restart_helper": true, "detail": "takes effect, on or off, only after the helper restarts; until then the old policy applies"}, nil
 	}
+	if a.command == "auto-enroll" {
+		if a.pos(0) != "on" && a.pos(0) != "off" {
+			return nil, errors.New("auto-enroll requires on or off")
+		}
+		config.AutoEnroll = a.pos(0) == "on"
+		if e = writeJSON(ctx, h, root, "config.json", config); e != nil {
+			return nil, errors.New("configuration write failed")
+		}
+		return map[string]any{"auto_enroll": config.AutoEnroll, "detail": "applied by the running helper at its next discovery; sessions you disable stay disabled"}, nil
+	}
 	allowlist := config.SessionAllowlist
 	if a.command == "daemon" && allowlist == nil {
 		allowlist = []string{}
@@ -238,7 +249,14 @@ func runPlatform(ctx context.Context, args []string) (any, error) {
 		if busy == nil {
 			busy = []string{"claude"}
 		}
-		daemon := core.Helper{Process: h.Process, Store: store, Hub: hub, Node: config.Node, Native: registry.NativeHooks(), BusyDelivery: busy}
+		daemon := core.Helper{Process: h.Process, Store: store, Hub: hub, Node: config.Node, Native: registry.NativeHooks(), BusyDelivery: busy,
+			AutoEnroll: func(ctx context.Context) bool {
+				var live core.Config
+				if readJSON(ctx, h, root, "config.json", &live) != nil {
+					return config.AutoEnroll
+				}
+				return live.AutoEnroll
+			}}
 		if e = daemon.Run(ctx, a.options["once"] == "true"); e != nil {
 			return nil, e
 		}
@@ -341,6 +359,7 @@ func runPlatform(ctx context.Context, args []string) (any, error) {
 		}
 		out["busy_delivery"] = map[string]any{"configured": configured, "effective": out["busy_delivery"], "pending_restart": out["running"] != true || !samePolicy(out["busy_delivery"], configured)}
 		out["attachments"] = agyPlatformStatus(ctx, h, root)
+		out["auto_enroll"] = config.AutoEnroll
 		return out, nil
 	case "wait":
 		return waitCommand(ctx, client, a)

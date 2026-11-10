@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"strings"
 	"sync"
@@ -34,6 +35,9 @@ type Helper struct {
 	directoryReady   bool
 	nextDiscovery    time.Time
 	BusyDelivery     []string
+	// AutoEnroll reports the node's auto-enroll setting; it is read on every
+	// discovery, so switching it needs no restart. Nil means off.
+	AutoEnroll func(context.Context) bool
 }
 
 func (h *Helper) Sync(ctx context.Context, wait float64) error {
@@ -191,6 +195,48 @@ func (h *Helper) Publish(ctx context.Context) error {
 	}
 	h.nextDiscovery = time.Now().Add(15 * time.Second)
 	h.dirtyDirectory()
+	return h.autoEnroll(ctx)
+}
+
+// autoEnroll enrolls every discovered session when the node asks for it. A
+// session the operator disabled stays disabled; the hub re-pins a resumed
+// session on publish, so enrolled sessions need nothing here.
+func (h *Helper) autoEnroll(ctx context.Context) error {
+	if h.AutoEnroll == nil || len(h.Sessions) == 0 || !h.AutoEnroll(ctx) {
+		return nil
+	}
+	var directory struct {
+		Sessions []struct {
+			Key      string `json:"key"`
+			Enrolled bool   `json:"enrolled"`
+			Disabled bool   `json:"disabled"`
+		} `json:"sessions"`
+	}
+	if e := RPC(ctx, h.Hub, "list", map[string]any{}, &directory); e != nil {
+		return e
+	}
+	rows := map[string]int{}
+	for i, s := range directory.Sessions {
+		rows[s.Key] = i
+	}
+	failed := 0
+	for _, s := range h.Sessions {
+		key := h.Node + "/" + s.Provider + ":" + s.ID
+		i, ok := rows[key]
+		if !ok || directory.Sessions[i].Enrolled || directory.Sessions[i].Disabled {
+			continue
+		}
+		if e := RPC(ctx, h.Hub, "enroll", map[string]any{"target": key}, nil); e != nil {
+			failed++
+		}
+	}
+	if h.ProviderErrors == nil {
+		h.ProviderErrors = map[string]string{}
+	}
+	delete(h.ProviderErrors, "auto_enroll")
+	if failed > 0 {
+		h.ProviderErrors["auto_enroll"] = fmt.Sprintf("%d session(s) could not be enrolled; retried at next discovery", failed)
+	}
 	return nil
 }
 func (h *Helper) Deliver(ctx context.Context) error {

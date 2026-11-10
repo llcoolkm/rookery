@@ -68,6 +68,7 @@ type Config struct {
 	AllowHTTP        bool     `json:"allow_http_loopback"`
 	BusyDelivery     []string `json:"busy_delivery"`
 	SessionAllowlist []string `json:"session_allowlist"`
+	AutoEnroll       bool     `json:"auto_enroll,omitempty"`
 }
 
 func (c Config) Validate() error {

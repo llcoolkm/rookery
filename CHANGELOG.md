@@ -6,6 +6,10 @@
   clients, the CLI, the MCP `send` tool and the hub. `reply` stays at 24 hours.
   A recipient that is busy for a long turn or held by an open dialog no longer
   loses mail after an hour.
+- Go helper: `rookery auto-enroll on|off` enrolls every session the helper
+  discovers (off by default, read at each discovery, kept by `configure`,
+  shown by `doctor`). A session the hub reports as disabled is never
+  auto-enrolled. Needs a hub that reports `disabled`.
 
 ## 0.3.1
 
