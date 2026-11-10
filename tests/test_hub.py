@@ -424,6 +424,36 @@ class HubTests(unittest.TestCase):
         message = self.send()
         self.assertAlmostEqual(message['expires'] - message['created'], 43200, delta=1)
 
+    def test_enrollment_errors_name_the_session_and_the_next_step(self):
+        c = dict(provider='claude', id=uid(), name='C', status='idle', pid=303)
+        ck = 'server/claude:' + c['id']
+        self.hub.call('server', 'publish', {'sessions': [self.a, c]})
+        with self.assertRaisesRegex(Error, r'this session \(server/claude:.*\) is not enrolled.*auto-enroll on'):
+            self.hub.call('server', 'send', {'actor': ck, 'to': self.bk, 'body': 'x', 'id': uid()})
+        self.hub.call('laptop', 'disable', {'target': self.bk})
+        with self.assertRaisesRegex(Error, r'recipient laptop/codex:.* is disabled; check peers'):
+            self.send()
+
+    def test_disable_is_recorded_and_stale_unaliased_sessions_are_forgotten(self):
+        c = dict(provider='claude', id=uid(), name='C', status='idle', pid=303)
+        ck = 'server/claude:' + c['id']
+        d = dict(provider='claude', id=uid(), name='D', status='idle', pid=404)
+        dk = 'server/claude:' + d['id']
+        self.hub.call('server', 'publish', {'sessions': [self.a, c, d]})
+        self.hub.call('server', 'enroll', {'target': ck})
+        self.hub.call('server', 'enroll', {'target': dk})
+        self.hub.call('server', 'disable', {'target': dk})
+        listed = {s['key']: s for s in self.hub.call('server', 'list')['sessions']}
+        self.assertTrue(listed[dk]['disabled'])
+        self.assertNotIn('disabled', listed[ck])
+        later = time.time() + RETENTION + 60
+        with patch('rookery.hub.time.time', return_value=later):
+            self.hub.call('laptop', 'publish', {'sessions': [self.b]})
+            listed = {s['key'] for s in self.hub.call('server', 'list')['sessions']}
+        self.assertNotIn(ck, listed)           # enrolled, no alias, unseen for a week
+        self.assertIn(self.ak, listed)         # aliased: kept
+        self.assertIn(dk, listed)              # disabled on purpose: kept
+
     def test_expiry_records_recipient_state_and_last_hold(self):
         waiting = self.send(ttl=1)
         self.hub.call('laptop', 'publish', {'sessions': [dict(self.b, status='waiting')]})

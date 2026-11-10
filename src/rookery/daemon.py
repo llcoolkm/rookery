@@ -242,6 +242,36 @@ class Helper:
             self.errors['hub'] = 'hub session quota reached; new sessions were not advertised'
         self.next_discovery = time.monotonic()+15
         self.directory_dirty = True
+        self.auto_enroll()
+
+    def auto_enroll(self):
+        """With auto_enroll on, every discovered session is enrolled.
+
+        A session the operator disabled stays disabled. A resumed session is
+        re-pinned by the hub on publish, so it needs nothing here. Read live,
+        so switching the option needs no restart.
+        """
+        try:
+            enabled = read_config(self.store.path).get('auto_enroll')
+        except (Error, OSError, ValueError):
+            enabled = self.config.get('auto_enroll')
+        if not enabled or not self.sessions:
+            return
+        self.errors.pop('auto_enroll', None)
+        node = self.config['node']
+        directory = {s['key']: s for s in self.client.call('list').get('sessions', []) if 'key' in s}
+        failed = 0
+        for session in self.sessions:
+            key = f"{node}/{session['provider']}:{session['id']}"
+            row = directory.get(key)
+            if row is None or row.get('enrolled') or row.get('disabled'):
+                continue
+            try:
+                self.client.call('enroll', {'target': key})
+            except Error:
+                failed += 1
+        if failed:
+            self.errors['auto_enroll'] = f'{failed} session(s) could not be enrolled; retried at next discovery'
 
     def deliver(self):
         node = self.config['node']

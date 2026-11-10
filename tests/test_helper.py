@@ -96,6 +96,28 @@ class HelperHubAdmissionTests(unittest.TestCase):
         self.deliver()
         self.submit.assert_not_called()
 
+    def enrolled(self, session):
+        key = f"test/{session['provider']}:{session['id']}"
+        return next(s for s in self.hub.call('test', 'list')['sessions'] if s['key'] == key)
+
+    def test_auto_enroll_enrolls_new_sessions_but_never_a_disabled_one(self):
+        from rookery.client import set_auto_enroll
+        root = self.helper.store.path
+        fresh = {'provider': 'claude', 'id': str(uuid.uuid4()), 'pid': 404, 'status': 'idle'}
+        self.helper.discover = lambda: ([copy.deepcopy(self.sender), copy.deepcopy(self.target), copy.deepcopy(fresh)], {})
+        self.helper.publish()
+        self.assertFalse(self.enrolled(fresh)['enrolled'])     # off by default
+        set_auto_enroll(root, True)
+        self.helper.publish()
+        self.assertTrue(self.enrolled(fresh)['enrolled'])
+        self.hub.call('test', 'disable', {'target': 'test/claude:' + fresh['id']})
+        self.helper.publish()
+        self.assertFalse(self.enrolled(fresh)['enrolled'])
+        self.assertNotIn('auto_enroll', self.helper.errors)
+        from rookery.client import configure, read_config
+        configure(root, 'test', 'http://127.0.0.1:9999', 'x' * 32, allow_http=True)
+        self.assertTrue(read_config(root)['auto_enroll'])       # survives reconfiguration
+
     def test_claude_opt_in_is_published_and_claimed_end_to_end(self):
         from rookery import providers
         self.addCleanup(providers.configure, {})

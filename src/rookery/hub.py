@@ -304,9 +304,12 @@ class Hub:
             db.execute("UPDATE metadata SET value=? WHERE key='request_floor'", (str(max(floor, pruned)),))
         db.execute("DELETE FROM requests WHERE (node,id) IN (SELECT node,id FROM request_expiry WHERE expires<=?)", (now,))
         db.execute("DELETE FROM request_expiry WHERE expires<=?", (now,))
-        # Never discard enrollment/alias choices, even for long-offline hosts.
-        # Messages retain their own routing identity and permanent ID binding.
-        db.execute("DELETE FROM sessions WHERE enrolled=0 AND alias IS NULL AND updated<?", (now - RETENTION,))
+        # Sessions unseen for the retention period are forgotten, enrolled or
+        # not, so finished conversations do not fill the directory. Kept: an
+        # alias (an operator's name for it) and an explicit disable. Messages
+        # retain their own routing identity and permanent ID binding.
+        db.execute("DELETE FROM sessions WHERE alias IS NULL AND updated<? AND "
+                   "(enrolled=1 OR enrollment IS NULL OR json_extract(enrollment,'$.disabled') IS NULL)", (now - RETENTION,))
         db.execute("DELETE FROM nodes WHERE updated<? AND NOT EXISTS (SELECT 1 FROM sessions WHERE sessions.node=nodes.node)", (now - RETENTION,))
 
     def _capacity(self, db, required, *, reserve=True):
@@ -321,11 +324,19 @@ class Hub:
             raise Overloaded("hub admission quota reached; operation was not accepted")
 
     @staticmethod
-    def _session(db, key):
+    def _session(db, key, *, recipient=False):
+        """An enrolled session, or an error that names it and the next step."""
         row = db.execute("SELECT * FROM sessions WHERE key=?", (key,)).fetchone()
-        if row is None or not row["enrolled"]:
-            raise Error("session is not enrolled")
-        return row
+        if row is not None and row["enrolled"]:
+            return row
+        disabled = row is not None and row["enrollment"] and "disabled" in json.loads(row["enrollment"])
+        if recipient:
+            raise Error(f"recipient {key} is " + ("disabled" if disabled else "not enrolled")
+                        + "; check peers for a current address")
+        if disabled:
+            raise Error(f"this session ({key}) was disabled by the operator; ask the user to re-enroll it")
+        raise Error(f"this session ({key}) is not enrolled; ask the user to run "
+                    f"`rookery enroll {key} --alias <name>`, or `rookery auto-enroll on` for this node")
 
     @staticmethod
     def _resolve(db, selector, *, owner=None):
@@ -369,6 +380,8 @@ class Hub:
             online = bool(row["live"] and 0 <= now - row["updated"] <= FRESH)
             data.update(enrolled=bool(row["enrolled"]), online=online, alias=row["alias"],
                         status=data["status"] if online else "unknown")
+            if not row["enrolled"] and row["enrollment"] and "disabled" in json.loads(row["enrollment"]):
+                data["disabled"] = True
             if row["enrolled"]:
                 enrollment = json.loads(row["enrollment"])
                 data["enrollment_current"] = enrollment.get("pid") is None or enrollment["pid"] == data.get("pid")
@@ -533,7 +546,9 @@ class Hub:
             if row is None:
                 raise Error("session has not been discovered")
             if op == "disable":
-                db.execute("UPDATE sessions SET enrolled=0 WHERE key=?", (key,))
+                # Recorded, so auto-enrolling helpers leave it alone and the
+                # row outlives retention; a later explicit enroll clears it.
+                db.execute("UPDATE sessions SET enrolled=0,enrollment=? WHERE key=?", (encoded({"disabled": now}), key))
             else:
                 if not row["live"] or not 0 <= now - row["updated"] <= FRESH:
                     raise Error("enrollment requires fresh host discovery")
@@ -602,7 +617,7 @@ class Hub:
                     raise Error("message ID already used for different content or target")
                 return json.loads(old["data"])
             self._session(db, actor)
-            self._session(db, recipient)
+            self._session(db, recipient, recipient=True)
             if actor == recipient or (deadline is not None and deadline <= now):
                 raise Error("self messaging or an expired deadline is forbidden")
             hops = parent["hops"] + 1 if parent else 0

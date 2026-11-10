@@ -56,6 +56,8 @@ def parser():
                                                 "on and off both take effect only after a helper restart")
     busy.add_argument("provider")
     busy.add_argument("state", choices=("on", "off"))
+    auto = sub.add_parser("auto-enroll", help="enroll every session this node discovers (on), or only by hand (off)")
+    auto.add_argument("state", choices=("on", "off"))
     install = sub.add_parser("install", help="plan (default) or apply Rookery MCP integration for one harness")
     install.add_argument("provider", choices=("claude", "codex", "agy"))
     install.add_argument("--apply", action="store_true", help="make the planned changes, backing up replaced files")
@@ -106,6 +108,9 @@ def run(args):
             return {}
     from .local_store import state_path
     path = state_path(args.state_dir)
+    if args.command == "auto-enroll":
+        from .client import set_auto_enroll
+        return set_auto_enroll(path, args.state == "on")
     if args.command == "busy-delivery":
         from .client import set_busy_delivery
         return set_busy_delivery(path, args.provider, args.state == "on")
@@ -169,6 +174,7 @@ def unified_run(args,path):
         # takes effect (on or off) only after a helper restart.
         effective = health.get('busy_delivery') if health.get('running') else None
         return {**health, 'attachments': agy_endpoint.status(Store(path)),
+                'auto_enroll': bool(client.config.get('auto_enroll')),
                 'busy_delivery': {'configured': configured, 'effective': effective,
                                   'pending_restart': effective is None or sorted(effective) != configured}}
     if command == 'status':

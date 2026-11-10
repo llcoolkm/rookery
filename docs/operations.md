@@ -311,6 +311,33 @@ rookery enroll codex:NEW_SESSION_UUID --alias author
 session is offline or disabled. It changes neither enrollment nor message
 history. Disabling alone keeps the alias.
 
+### Automatic enrollment
+
+```sh
+rookery auto-enroll on      # or off
+```
+
+With `auto-enroll on`, the helper enrolls every session it discovers on this
+node, so a new session can send and receive from its first turn without a manual
+`enroll`. It is off by default and applies from the helper's next discovery; no
+restart is needed. Auto-enrolled sessions have no alias: peers see their name
+and full address, and `rookery enroll ADDRESS --alias NAME` still names one.
+`rookery disable` is recorded by the hub, and a disabled session is never
+auto-enrolled again; an explicit `enroll` lifts it. `rookery doctor` shows the
+setting as `auto_enroll`.
+
+### Session cleanup
+
+The hub forgets a session that no helper has published for seven days, enrolled
+or not, so finished conversations do not fill `peers`. It keeps a session with
+an alias and a session that was explicitly disabled. A forgotten session that
+returns is discovered again (and auto-enrolled, if that is on). Message history
+is unaffected.
+
+When enrollment is missing, errors say which side it is and what to do: `this
+session (ADDRESS) is not enrolled` names the enroll command, and `recipient
+ADDRESS is not enrolled` (or `disabled`) points to `peers` for a current address.
+
 `rookery install` (below) configures the MCP server to derive each session's
 identity from the calling harness. To bind one MCP instance by hand instead:
 

@@ -28,7 +28,7 @@ def configure(path, node, url, token, allow_http=False):
         if old['node'] != node or old['url'] != config['url']:
             raise Error('use a fresh state directory to change hub or node')
         # Operator options survive reconfiguration.
-        config.update({k: v for k, v in old.items() if k == 'busy_delivery'})
+        config.update({k: v for k, v in old.items() if k in ('busy_delivery', 'auto_enroll')})
     atomic(path/'config.json',config)
     for name in ('spool','results'):
         (path/name).mkdir(mode=0o700,exist_ok=True)
@@ -53,6 +53,16 @@ def set_busy_delivery(path, provider, enabled):
     atomic(path/'config.json', config)
     return {'busy_delivery': config['busy_delivery'], 'restart_helper': True,
             'detail': 'takes effect, on or off, only after the helper restarts; until then the old policy applies'}
+
+
+def set_auto_enroll(path, enabled):
+    """Enroll every session this helper discovers, without a manual step."""
+    path = state_path(path)
+    config = read_config(path)
+    config['auto_enroll'] = bool(enabled)
+    atomic(path/'config.json', config)
+    return {'auto_enroll': config['auto_enroll'],
+            'detail': 'applied by the running helper at its next discovery; sessions you disable stay disabled'}
 
 
 def read_config(path):

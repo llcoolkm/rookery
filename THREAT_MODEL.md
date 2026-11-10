@@ -125,8 +125,11 @@ Byte admission also reserves the smaller of 16 MiB and 20% of the configured
 budget for completion. Capacity checks include metadata changes and WAL size;
 these reserves do not guarantee unlimited completion or availability under load.
 Session metadata is capped at 512 identities per node and 4,096 overall, with at
-most 128 nodes. Unenrolled sessions without aliases become eligible for pruning
-after seven days without an update; enrolled or aliased sessions are preserved.
+most 128 nodes. Sessions without an alias become eligible for pruning after seven
+days without an update, enrolled or not; aliased and explicitly disabled sessions
+are preserved. A node with `auto-enroll on` enrolls every session it discovers:
+each becomes reachable by every token holder, as an explicit enrollment would.
+This grants nothing beyond what the node token already allows.
 At the session cap, the hub continues to refresh existing advertised sessions
 and the node heartbeat, but refuses new session identities. The helper reports
 those refusals through its health diagnostics. Disable and clear aliases from
