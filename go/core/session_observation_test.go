@@ -39,7 +39,7 @@ func TestPublishSessionMetadataMapsTmuxAncestors(t *testing.T) {
 	h := Helper{Process: process, Hub: hub}
 	h.Native.Discover = func(context.Context) ([]Session, map[string]string) {
 		return []Session{
-			{Provider: "claude", ID: "grandchild", Status: "waiting", WaitingFor: "permission", Cwd: "/workspace", PID: 11, ProcessRef: &platform.ProcessRef{PID: 11}},
+			{Provider: "claude", ID: "grandchild", Status: "waiting", StatusSince: 100, WaitingFor: "permission", Cwd: "/workspace", PID: 11, ProcessRef: &platform.ProcessRef{PID: 11}},
 			{Provider: "claude", ID: "direct", Status: "idle", WaitingFor: "out of date", Cwd: "     ", PID: 12, ProcessRef: &platform.ProcessRef{PID: 12}},
 			{Provider: "claude", ID: "outside", Status: "waiting", WaitingFor: "invalid\x1b", Cwd: strings.Repeat("å", 257), PID: 19, ProcessRef: &platform.ProcessRef{PID: 19}},
 			{Provider: "codex", ID: "shared-daemon", Status: "waiting", WaitingFor: "approval", PID: 12, ProcessRef: &platform.ProcessRef{PID: 12}},
@@ -60,55 +60,59 @@ func TestPublishSessionMetadataMapsTmuxAncestors(t *testing.T) {
 		t.Fatalf("published unsupported or malformed metadata: %v", published.Sessions)
 	}
 	for _, row := range published.Sessions {
-		if since, ok := row["status_since"].(float64); !ok || since <= 0 {
-			t.Fatalf("missing status transition time: %v", row)
+		if _, ok := row["status_since"]; ok {
+			t.Fatalf("helper published hub-owned status transition time: %v", row)
 		}
 	}
 }
 
 func TestSessionPublishRequestSizesEncodedOptionalMetadata(t *testing.T) {
-	rows := make([]map[string]any, 128)
-	for i := range rows {
-		// The wire encoder expands angle brackets to six bytes each.
-		rows[i] = map[string]any{"name": strings.Repeat("<", 256), "cwd": strings.Repeat("<", 512), "waiting_for": "approval", "status_since": 100}
-	}
-	request, err := sessionPublishRequest(rows, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	body, err := json.Marshal(request)
-	if err != nil || len(body) > maxRequestBytes {
-		t.Fatalf("publish frame does not fit: %d bytes, %v", len(body), err)
-	}
-	var payload struct{ Sessions []map[string]any }
-	if err := json.Unmarshal(request.Data, &payload); err != nil || len(payload.Sessions) != 128 {
-		t.Fatalf("publish batch changed: %d rows, %v", len(payload.Sessions), err)
-	}
-	for _, row := range payload.Sessions {
-		if row["cwd"] != nil || row["waiting_for"] != "approval" || row["status_since"] != float64(100) {
-			t.Fatalf("unexpected optional metadata shedding: %v", row)
-		}
+	for _, tc := range []struct {
+		name, tmux, reason   string
+		dropTmux, dropReason bool
+	}{
+		{name: "cwd", tmux: "main:3", reason: "approval"},
+		{name: "tmux", tmux: strings.Repeat("<", 126) + ":3", reason: "approval", dropTmux: true},
+		{name: "waiting_for", tmux: strings.Repeat("<", 126) + ":3", reason: strings.Repeat(">", 128), dropTmux: true, dropReason: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rows := make([]map[string]any, 128)
+			for i := range rows {
+				// The wire encoder expands angle brackets to six bytes each.
+				rows[i] = map[string]any{"name": strings.Repeat("<", 256), "cwd": strings.Repeat("<", 512), "tmux": tc.tmux, "waiting_for": tc.reason}
+			}
+			request, err := sessionPublishRequest(rows, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			body, err := json.Marshal(request)
+			if err != nil || len(body) > maxRequestBytes {
+				t.Fatalf("publish frame does not fit: %d bytes, %v", len(body), err)
+			}
+			var payload struct{ Sessions []map[string]any }
+			if err := json.Unmarshal(request.Data, &payload); err != nil || len(payload.Sessions) != 128 {
+				t.Fatalf("publish batch changed: %d rows, %v", len(payload.Sessions), err)
+			}
+			for _, row := range payload.Sessions {
+				if row["cwd"] != nil || (row["tmux"] == nil) != tc.dropTmux || (row["waiting_for"] == nil) != tc.dropReason {
+					t.Fatalf("unexpected optional metadata shedding: %v", row)
+				}
+			}
+		})
 	}
 }
 
-func TestObserveSessionStatusSince(t *testing.T) {
-	h := Helper{}
-	ref := platform.ProcessRef{PID: 12, Start: "first"}
-	s := Session{Provider: "claude", ID: "same", Status: "waiting", PID: ref.PID, ProcessRef: &ref}
-	observe := func(now, want float64) {
-		t.Helper()
-		got := h.observeSessions(context.Background(), []Session{s}, now)
-		if got[0].StatusSince != want {
-			t.Fatalf("at %g: status_since=%g, want %g", now, got[0].StatusSince, want)
-		}
+func TestPublishKeepsLatestLocalSessionsWhenOverLimit(t *testing.T) {
+	h := Helper{Sessions: []Session{{ID: "old"}}}
+	h.Native.Discover = func(context.Context) ([]Session, map[string]string) {
+		sessions := make([]Session, 129)
+		sessions[0].ID = "new"
+		return sessions, map[string]string{"claude": "discovery error"}
 	}
-	observe(10, 10)
-	observe(20, 10)
-	s.Status = "busy"
-	observe(30, 30)
-	observe(40, 30)
-	ref.Start = "resumed"
-	observe(50, 50)
-	h.observeSessions(context.Background(), nil, 60)
-	observe(70, 70)
+	if err := h.Publish(context.Background()); err == nil {
+		t.Fatal("oversized discovery should fail publication")
+	}
+	if len(h.Sessions) != 129 || h.Sessions[0].ID != "new" || h.ProviderErrors["claude"] == "" {
+		t.Fatal("oversized discovery left local discovery state stale")
+	}
 }

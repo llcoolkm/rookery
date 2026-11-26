@@ -139,6 +139,8 @@ def create_conversations_app(hub, password_hashes):
                 (b"cache-control", b"no-store"),
                 (b"x-content-type-options", b"nosniff"),
                 (b"referrer-policy", b"no-referrer"),
+                (b"cross-origin-resource-policy", b"same-origin"),
+                (b"cross-origin-opener-policy", b"same-origin"),
                 (b"content-security-policy",
                  b"default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; "
                  b"base-uri 'none'; form-action 'none'; frame-ancestors 'none'"),
@@ -152,6 +154,10 @@ def create_conversations_app(hub, password_hashes):
         hosts = [value for key, value in headers if key == b"host"]
         if len(hosts) != 1 or not LOCAL_HOST.fullmatch(hosts[0]):
             await respond(400, {"error": "invalid local host"})
+            return
+        sites = [value for key, value in headers if key == b"sec-fetch-site"]
+        if sites and sites not in ([b"same-origin"], [b"none"]):
+            await respond(403, {"error": "cross-origin request refused"})
             return
         if not _authorized(headers, password_hashes):
             await respond(401, {"error": "authentication required"},

@@ -860,7 +860,8 @@ coordinates appears when the provider and helper supply it.
 Run `rookery sessions` for the terminal table, or `rookery sessions --watch 5`
 to refresh it every five seconds. The terminal reads the local peers directory,
 which contains the node's sessions and enrolled peers. The hub viewer endpoint
-requires its own credential and includes the full published directory.
+requires its own credential and includes the full published directory. A node
+credential sees working directories only for sessions on that node.
 
 ## Message safety and recovery
 

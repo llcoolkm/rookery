@@ -13,8 +13,9 @@ from unittest.mock import patch
 import uuid
 
 from rookery.conversations import create_conversations_app
+from rookery.core import Error
 from rookery.hub import Hub, MAX_REQUEST, MESSAGE_BODY_RETENTION, authenticate_hash_file, create_app
-from rookery.hub_http import listener, snapshot_once
+from rookery.hub_http import listener, serve, snapshot_once
 
 
 class HttpTests(unittest.IsolatedAsyncioTestCase):
@@ -47,6 +48,7 @@ class HttpTests(unittest.IsolatedAsyncioTestCase):
         async def send(event):
             output.append(event)
         await (app or self.app)(scope, receive, send)
+        self.response_headers = dict(output[0]['headers'])
         return output[0]['status'], output[1]['body']
 
     async def test_authentication_and_errors_do_not_expose_credentials_or_content(self):
@@ -162,20 +164,78 @@ class HttpTests(unittest.IsolatedAsyncioTestCase):
 
         claude, codex = str(uuid.uuid4()), str(uuid.uuid4())
         stamp = time.time()
-        self.hub.call('server', 'publish', {'sessions': [{
-            'id': claude, 'provider': 'claude', 'status': 'waiting', 'waiting_for': 'permission',
-            'tmux': 'work:2', 'cwd': '/home/km/project', 'status_since': stamp, 'pid': 42,
-        }]})
+        with patch('rookery.hub.time.time', return_value=stamp):
+            self.hub.call('server', 'publish', {'sessions': [{
+                'id': claude, 'provider': 'claude', 'status': 'waiting', 'waiting_for': 'permission',
+                'tmux': 'work:2', 'cwd': '/home/km/project', 'pid': 42,
+            }]})
         self.hub.call('server02', 'publish', {'sessions': [{'id': codex, 'provider': 'codex', 'status': 'busy'}]})
+        offline_stamp = self.hub.call('server02', 'list')['sessions'][0]['status_since']
         self.hub.call('server02', 'publish', {'sessions': []})
         self.assertEqual([row['id'] for row in self.hub.call('server02', 'list')['sessions']], [codex])
-        status, body = await self.request(app=app, path='/sessions', method='GET', auth=False, extra_headers=(host, auth))
-        self.assertEqual(status, 200)
+        for site in (b'cross-site', b'same-site', b'unexpected'):
+            status, _ = await self.request(app=app, path='/sessions', method='GET', auth=False,
+                                           extra_headers=(host, auth, (b'sec-fetch-site', site)))
+            self.assertEqual(status, 403)
+        for site in (b'none', b'same-origin'):
+            status, body = await self.request(app=app, path='/sessions', method='GET', auth=False,
+                                              extra_headers=(host, auth, (b'sec-fetch-site', site)))
+            self.assertEqual(status, 200)
+            self.assertEqual(self.response_headers[b'cross-origin-resource-policy'], b'same-origin')
+            self.assertEqual(self.response_headers[b'cross-origin-opener-policy'], b'same-origin')
         self.assertEqual(json.loads(body), {'sessions': [
             {'node': 'server', 'id': claude, 'provider': 'claude', 'name': claude, 'status': 'waiting', 'online': True,
              'waiting_for': 'permission', 'tmux': 'work:2', 'cwd': '/home/km/project', 'status_since': stamp},
-            {'node': 'server02', 'id': codex, 'provider': 'codex', 'name': codex, 'status': 'unknown', 'online': False},
+            {'node': 'server02', 'id': codex, 'provider': 'codex', 'name': codex, 'status': 'unknown', 'online': False,
+             'status_since': offline_stamp},
         ]})
+
+    async def test_publish_with_skewed_helper_timestamp_keeps_presence_and_delivery(self):
+        stamp = time.time()
+        sender, target = (str(uuid.uuid4()) for _ in range(2))
+        rows = [{'id': sender, 'provider': 'codex', 'status': 'idle'},
+                {'id': target, 'provider': 'claude', 'status': 'idle', 'status_since': stamp + 600}]
+        with patch('rookery.hub.time.time', return_value=stamp):
+            status, data = await self.request({'op': 'publish', 'data': {'sessions': rows}})
+            self.assertEqual(status, 200)
+            self.assertEqual(json.loads(data)['result'], {'published': 2, 'invalid_metadata': 1})
+            for row in rows:
+                key = f"server/{row['provider']}:{row['id']}"
+                self.hub.call('server', 'enroll', {'target': key})
+            outgoing = {'actor': f'server/codex:{sender}', 'to': f'server/claude:{target}',
+                        'id': str(uuid.uuid4()), 'body': 'delivery remains eligible'}
+            self.assertEqual((await self.request({'op': 'send', 'data': outgoing}))[0], 200)
+
+        with patch('rookery.hub.time.time', return_value=stamp + 61):
+            rows[1]['status_since'] += 61
+            self.assertEqual((await self.request({'op': 'publish', 'data': {'sessions': rows}}))[0], 200)
+            status, data = await self.request({'op': 'list'})
+            self.assertEqual(status, 200)
+            sessions = {row['id']: row for row in json.loads(data)['result']['sessions']}
+            self.assertTrue(sessions[target]['online'])
+            self.assertEqual(sessions[target]['status_since'], stamp)
+            status, data = await self.request({'op': 'claim'})
+            self.assertEqual(status, 200)
+            self.assertEqual(json.loads(data)['result']['delivery']['message']['id'], outgoing['id'])
+
+    async def test_startup_rejects_unusable_viewer_hash_file_before_opening_db(self):
+        digest = hashlib.sha256(self.token.encode()).hexdigest()
+        hashes = self.root / 'viewer.json'
+        db = self.root / 'new.sqlite3'
+        args = SimpleNamespace(listen='127.0.0.1:8787', metrics_listen='127.0.0.1:8788',
+                               conversations_listen='127.0.0.1:8789', conversations_password_hash_file=hashes,
+                               db=db, tokens=self.tokens)
+        for value, mode in [(None, 0o600), ('{bad', 0o600), (json.dumps({'server': digest}), 0o600),
+                            (json.dumps({'viewer': digest, 'server': digest}), 0o600),
+                            (json.dumps({'viewer': 'malformed'}), 0o600),
+                            (json.dumps({'viewer': digest}), 0o666)]:
+            with self.subTest(value=value, mode=mode):
+                if value is not None:
+                    hashes.write_text(value)
+                    hashes.chmod(mode)
+                with self.assertRaisesRegex(Error, 'password hash file must be private JSON'):
+                    await serve(args)
+                self.assertFalse(db.exists())
 
     async def test_longpoll_yields_to_publication_and_returns_incremental_directory_event(self):
         cursor = self.hub.call('server', 'sync')['cursor']

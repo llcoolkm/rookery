@@ -8,12 +8,17 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
+	"time"
 
 	"github.com/llcoolkm/rookery/go/platform"
 )
 
-type processes struct{}
+type processes struct {
+	tmuxMu         sync.Mutex
+	tmuxRetryAfter time.Time
+}
 
 func processStat(pid int) ([]string, error) {
 	if pid <= 0 {

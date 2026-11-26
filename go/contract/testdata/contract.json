@@ -131,7 +131,8 @@
               "online": true,
               "pid": 101,
               "provider": "claude",
-              "status": "idle"
+              "status": "idle",
+              "status_since": 1800000000.0
             },
             {
               "alias": "beta",
@@ -144,7 +145,8 @@
               "online": true,
               "pid": 202,
               "provider": "codex",
-              "status": "idle"
+              "status": "idle",
+              "status_since": 1800000000.0
             }
           ]
         }
@@ -313,7 +315,8 @@
               "node": "beta",
               "pid": 202,
               "provider": "codex",
-              "status": "idle"
+              "status": "idle",
+              "status_since": 1800000000.0
             }
           }
         }
@@ -628,7 +631,8 @@
               "online": true,
               "pid": 101,
               "provider": "claude",
-              "status": "idle"
+              "status": "idle",
+              "status_since": 1800000000.0
             },
             {
               "alias": "beta",
@@ -641,7 +645,8 @@
               "online": true,
               "pid": 202,
               "provider": "codex",
-              "status": "idle"
+              "status": "idle",
+              "status_since": 1800000000.0
             }
           ]
         }
@@ -1149,7 +1154,8 @@
               "node": "beta",
               "pid": 202,
               "provider": "codex",
-              "status": "idle"
+              "status": "idle",
+              "status_since": 1800000000.0
             }
           }
         }

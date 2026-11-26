@@ -34,7 +34,6 @@ type Helper struct {
 	directoryLoaded  uint64
 	directoryReady   bool
 	nextDiscovery    time.Time
-	observations     map[string]sessionObservation
 	BusyDelivery     []string
 	// AutoEnroll reports the node's auto-enroll setting; it is read on every
 	// discovery, so switching it needs no restart. Nil means off.
@@ -175,29 +174,28 @@ func (h *Helper) Publish(ctx context.Context) error {
 	if h.Native.Discover != nil {
 		sessions, errs = h.Native.Discover(ctx)
 	}
-	h.ProviderErrors = errs
+	h.Sessions, h.ProviderErrors = sessions, errs
 	if len(sessions) > 128 {
 		return errors.New("provider discovery exceeds publish limit")
 	}
-	sessions = h.observeSessions(ctx, sessions, seconds())
-	h.Sessions = sessions
+	panes := h.tmuxPanes(ctx, sessions)
 	rows := []map[string]any{}
 	for _, s := range sessions {
-		row := map[string]any{"provider": s.Provider, "id": s.ID, "name": s.Name, "status": s.Status, "admission": s.Admission, "status_since": s.StatusSince}
+		row := map[string]any{"provider": s.Provider, "id": s.ID, "name": s.Name, "status": s.Status, "admission": s.Admission}
 		if s.PID > 0 {
 			row["pid"] = s.PID
 		}
 		if s.Delivery != "" {
 			row["delivery"] = s.Delivery
 		}
-		if s.WaitingFor != "" {
-			row["waiting_for"] = s.WaitingFor
+		if waitingFor := sessionText(s.WaitingFor, 128); s.Status == "waiting" && waitingFor != "" {
+			row["waiting_for"] = waitingFor
 		}
-		if s.Tmux != "" {
-			row["tmux"] = s.Tmux
+		if tmux := h.sessionTmux(ctx, sessionPaneProcess(s), panes); tmux != "" {
+			row["tmux"] = tmux
 		}
-		if s.Cwd != "" {
-			row["cwd"] = s.Cwd
+		if cwd := sessionText(s.Cwd, 512); cwd != "" {
+			row["cwd"] = cwd
 		}
 		rows = append(rows, row)
 	}

@@ -76,6 +76,30 @@ class CliTests(unittest.TestCase):
         self.assertIn('2s', output)
         self.assertNotIn('offline-only', output)
 
+    def test_sessions_watch_recovers_and_distinguishes_connection_states(self):
+        client = Mock()
+        client.peers.side_effect = [OSError('temporary\x1b failure'), {'sessions': None},
+                                    {'sessions': [], 'detail': 'helper has not connected yet'},
+                                    {'sessions': [], 'stale': True}, {'sessions': [], 'stale': False}]
+        stdout = io.StringIO()
+        with patch('rookery.cli.time.sleep', side_effect=[None, None, None, None, KeyboardInterrupt]) as sleep, \
+                contextlib.redirect_stdout(stdout):
+            self.assertIsNone(cli.show_sessions(client, 5))
+        output = stdout.getvalue()
+        self.assertIn('Could not read peer sessions: temporary? failure', output)
+        self.assertEqual(output.count('Could not read peer sessions:'), 2)
+        self.assertIn('Helper has not connected yet.', output)
+        self.assertIn('Peer data is stale.', output)
+        self.assertIn('No live peer sessions.', output)
+        self.assertEqual(client.peers.call_count, 5)
+        self.assertEqual(sleep.call_count, 5)
+
+    def test_sessions_one_shot_still_reports_read_error(self):
+        client = Mock()
+        client.peers.side_effect = OSError('cannot read snapshot')
+        with self.assertRaisesRegex(OSError, 'cannot read snapshot'):
+            cli.show_sessions(client, None)
+
     def test_configure_explains_hash_handoff_without_exposing_token(self):
         import hashlib
         token = 'synthetic-onboarding-credential-' * 2

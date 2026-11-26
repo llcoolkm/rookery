@@ -9,7 +9,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 // ErrControlEndpointUnsafe reports a refused control endpoint without exposing
@@ -75,6 +78,13 @@ type Process interface {
 // native tmux. The snapshot maps pane process IDs to session:window coordinates.
 type TmuxPanes interface {
 	TmuxPanes(context.Context) map[int]string
+}
+
+// ValidTmuxCoordinate checks the session:window format accepted by the hub.
+func ValidTmuxCoordinate(value string) bool {
+	name, window, ok := strings.Cut(value, ":")
+	return ok && name != "" && window != "" && strings.Trim(window, "0123456789") == "" &&
+		len(value) <= 128 && utf8.ValidString(value) && !strings.ContainsFunc(value, unicode.IsControl)
 }
 
 // Spec describes direct native execution. Path is an absolute platform-validated

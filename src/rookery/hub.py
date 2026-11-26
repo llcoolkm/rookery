@@ -19,10 +19,11 @@ import sqlite3
 import stat
 import time
 import tempfile
+import unicodedata
 import uuid
 from urllib.parse import parse_qs
 
-from .core import Error, MAX_BYTES, MAX_HOPS, SEND_TTL
+from .core import Error, MAX_BYTES, MAX_HOPS, MAX_REQUEST, SEND_TTL
 from .common import NODE, address, canonical_id, owned
 from .request_ids import CLOCK_SKEW, REQUEST_WINDOW, request_created
 
@@ -33,7 +34,6 @@ GRAPH_NODES = 500
 GRAPH_EDGES = 2000
 FRESH = 60
 DISPATCH_TIMEOUT = 90
-MAX_REQUEST = 256 * 1024
 TERMINAL = {"submitted", "uncertain", "failed", "acknowledged", "replied", "expired", "cancelled"}
 MUTATIONS = {"enroll", "disable", "clear-alias", "send", "reply", "ack", "read", "received", "result", "reconcile"}
 ALIAS = re.compile(r"[a-z][a-z0-9_-]{0,63}\Z")
@@ -77,7 +77,7 @@ def integer(value, minimum, maximum):
     return value
 
 
-def authenticate_hash_file(path, authorization):
+def read_hash_file(path):
     """Accept private user files or integrity-protected root-owned K8s projections.
 
     These files contain hashes, not bearer credentials. Following a projected
@@ -89,26 +89,61 @@ def authenticate_hash_file(path, authorization):
             return None
         if info.st_uid != 0 and info.st_mode & 0o077:
             return None
-        if info.st_size > 65536 or not authorization.startswith("Bearer "):
-            return None
-        token = authorization[7:]
-        if not 32 <= len(token) <= 4096:
+        if info.st_size > 65536:
             return None
         records = json.loads(path.read_text())
         if not isinstance(records, dict):
             return None
-        digest, matched = hashlib.sha256(token.encode()).hexdigest(), None
         for owner, expected in records.items():
             if (not isinstance(owner, str) or not NODE.fullmatch(owner) or not isinstance(expected, str)
                     or not re.fullmatch(r"[a-f0-9]{64}", expected)):
                 return None
-            if hmac.compare_digest(digest, expected):
-                if matched is not None:
-                    return None
-                matched = owner
-        return matched
-    except (OSError, ValueError, UnicodeError):
+        return records
+    except (OSError, ValueError, UnicodeError, RecursionError):
         return None
+
+
+def authenticate_hash_file(path, authorization):
+    token = authorization.removeprefix("Bearer ")
+    if token == authorization or not 32 <= len(token) <= 4096:
+        return None
+    records = read_hash_file(path)
+    if records is None:
+        return None
+    try:
+        digest = hashlib.sha256(token.encode()).hexdigest()
+    except UnicodeError:
+        return None
+    matched = [owner for owner, expected in records.items() if hmac.compare_digest(digest, expected)]
+    return matched[0] if len(matched) == 1 else None
+
+
+def _session_presence(row, now):
+    data = json.loads(row["data"])
+    data["online"] = bool(row["live"] and 0 <= now - row["updated"] <= FRESH)
+    if not data["online"]:
+        data["status"] = "unknown"
+    return data
+
+
+def _repair_optional_publish_values(data):
+    """Keep valid rows when a display field cannot be represented as UTF-8 JSON."""
+    sessions = data.get("sessions")
+    if not isinstance(sessions, list) or len(sessions) > 128:
+        return data
+    rows = []
+    for row in sessions:
+        if isinstance(row, dict):
+            row = dict(row)
+            for field in (*SESSION_TEXT_LIMITS, "status_since"):
+                if field in row:
+                    try:
+                        encoded(row[field])
+                    except Error:
+                        # A null is counted and discarded by publication validation.
+                        row[field] = None
+        rows.append(row)
+    return {**data, "sessions": rows}
 
 
 class Hub:
@@ -376,17 +411,14 @@ class Hub:
         return {"waiting": "waiting on a dialog", "busy": "busy", "idle": "idle"}.get(data.get("status"), "unknown")
 
     @staticmethod
-    def _directory(db, node=None):
-        if node is None:
-            rows = db.execute("SELECT * FROM sessions ORDER BY node,key")
-        else:
-            rows = db.execute("SELECT * FROM sessions WHERE node=? OR enrolled=1 ORDER BY node,key", (node,))
+    def _directory(db, node):
+        rows = db.execute("SELECT * FROM sessions WHERE node=? OR enrolled=1 ORDER BY node,key", (node,))
         now, result = time.time(), []
         for row in rows:
-            data = json.loads(row["data"])
-            online = bool(row["live"] and 0 <= now - row["updated"] <= FRESH)
-            data.update(enrolled=bool(row["enrolled"]), online=online, alias=row["alias"],
-                        status=data["status"] if online else "unknown")
+            data = _session_presence(row, now)
+            if row["node"] != node:
+                data.pop("cwd", None)
+            data.update(enrolled=bool(row["enrolled"]), alias=row["alias"])
             if not row["enrolled"] and row["enrollment"] and "disabled" in json.loads(row["enrollment"]):
                 data["disabled"] = True
             if row["enrolled"]:
@@ -400,14 +432,25 @@ class Hub:
     def fleet_sessions(self):
         fields = ("node", "provider", "id", "name", "status", "online", "status_since", *SESSION_TEXT_LIMITS)
         with self._tx(write=False) as db:
+            rows = db.execute("SELECT data,live,updated FROM sessions ORDER BY node,key")
+            now = time.time()
             return [{field: session[field] for field in fields if field in session}
-                    for session in self._directory(db)]
+                    for session in (_session_presence(row, now) for row in rows)]
 
     def call(self, node, op, data=None):
         if not isinstance(node, str) or not NODE.fullmatch(node) or not isinstance(op, str):
             raise Error("invalid node or operation")
         data = {} if data is None else data
-        if not isinstance(data, dict) or len(encoded(data).encode()) > MAX_REQUEST:
+        if not isinstance(data, dict):
+            raise Error("invalid or oversized request")
+        try:
+            size = len(encoded(data).encode())
+        except Error:
+            if op != "publish":
+                raise
+            data = _repair_optional_publish_values(data)
+            size = len(encoded(data).encode())
+        if size > MAX_REQUEST:
             raise Error("invalid or oversized request")
         data = dict(data)
         rid = data.pop("_request_id", None)
@@ -469,7 +512,7 @@ class Hub:
             sessions = data["sessions"]
             if not isinstance(sessions, list) or len(sessions) > 128:
                 raise Error("publish requires at most 128 sessions")
-            clean, seen = [], set()
+            clean, seen, invalid_metadata = [], set(), 0
             for item in sessions:
                 key = f"{node}/{item['provider']}:{item['id']}"
                 owned(key, node)
@@ -486,14 +529,17 @@ class Hub:
                         text = item[field]
                         if (not isinstance(text, str) or not text.strip() or len(text.encode()) > limit
                                 or SESSION_CONTROL.search(text)
+                                or any(unicodedata.category(char) == "Cf" for char in text)
                                 or (field == "tmux" and not re.fullmatch(r"[^:]+:[0-9]+", text))):
-                            raise Error(f"invalid session {field}")
-                        value[field] = text
+                            invalid_metadata += 1
+                        else:
+                            value[field] = text
                 if "status_since" in item:
+                    # Older dashboard builds sent a helper-clock timestamp.
+                    # Keep accepting that payload, but use the hub clock below.
                     stamp = item["status_since"]
                     if not number(stamp) or not 0 <= stamp <= now + CLOCK_SKEW:
-                        raise Error("invalid session status_since")
-                    value["status_since"] = stamp
+                        invalid_metadata += 1
                 if "pid" in item:
                     value["pid"] = integer(item["pid"], 1, 2**31 - 1)
                 if item.get("delivery") in {"polling", "attached"}:
@@ -535,8 +581,15 @@ class Hub:
             db.execute("UPDATE sessions SET live=0 WHERE node=?", (node,))
             changed = was_offline
             for value in clean:
+                previous_raw, previous_live = previous.get(value["key"], (None, 0))
+                prior = json.loads(previous_raw) if previous_raw is not None else {}
+                stamp = prior.get("status_since")
+                if (not number(stamp) or not 0 <= stamp <= now or prior.get("status") != value["status"]
+                        or prior.get("pid") != value.get("pid")):
+                    stamp = now
+                value["status_since"] = stamp
                 raw = encoded(value)
-                changed |= previous.get(value["key"]) != (raw, 1)
+                changed |= (previous_raw, previous_live) != (raw, 1)
                 db.execute("INSERT INTO sessions(key,node,data,updated) VALUES (?,?,?,?) ON CONFLICT(key) DO UPDATE SET data=excluded.data,live=1,updated=excluded.updated",
                            (value["key"], node, raw, now))
                 # The owning helper publishes each session UUID from the
@@ -554,7 +607,8 @@ class Hub:
             changed |= any(previous[key][1] for key in set(previous) - seen)
             if changed:
                 self._emit(db, ("*",), "directory", {"changed": True})
-            return {"published": len(clean), **({"refused": refused} if refused else {})}
+            return {"published": len(clean), **({"refused": refused} if refused else {}),
+                    **({"invalid_metadata": invalid_metadata} if invalid_metadata else {})}
         if op == "clear-alias":
             # Require the exact address, including for disabled/offline rows.
             # Resolving a friendly alias here could clear the wrong session

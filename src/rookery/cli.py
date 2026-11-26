@@ -219,14 +219,24 @@ def show_sessions(client, interval):
         raise Error('--watch must be between 1 and 3600 seconds')
     try:
         while True:
+            try:
+                output = session_table(client.peers(), time.time())
+            except (Error, OSError, ValueError, AttributeError, KeyError, TypeError) as exc:
+                if interval is None:
+                    raise
+                output = f'Could not read peer sessions: {_terminal_text(str(exc))}'
             if interval and sys.stdout.isatty() and os.environ.get('TERM', 'dumb') != 'dumb':
                 print('\033[H\033[J', end='')
-            print(session_table(client.peers(), time.time()), flush=True)
+            print(output, flush=True)
             if interval is None:
                 return
             time.sleep(interval)
     except KeyboardInterrupt:
         return
+
+
+def _terminal_text(value):
+    return ''.join(c if c.isprintable() else '?' for c in value) if value else '—'
 
 
 def session_table(directory, now):
@@ -241,11 +251,17 @@ def session_table(directory, now):
                   row.get('waiting_for') if row['status'] == 'waiting' else None,
                   f'{age}s' if age is not None else None,
                   f"{row['node']} {row['tmux']}" if row.get('tmux') else None, row.get('cwd'))
-        rows.append(tuple(''.join(c if c.isprintable() else '?' for c in value) if value else '—' for value in values))
+        rows.append(tuple(_terminal_text(value) for value in values))
     widths = [max(map(len, column)) for column in zip(*rows)]
     lines = ['  '.join(value.ljust(width) for value, width in zip(row, widths)).rstrip() for row in rows]
     if not sessions:
-        lines.append('No live peer sessions.' if not directory.get('stale') else 'Peer data is stale.')
+        notice = directory.get('detail')
+        if directory.get('stale'):
+            lines.append('Peer data is stale.')
+        elif notice == 'helper has not connected yet':
+            lines.append('Helper has not connected yet.')
+        else:
+            lines.append('No live peer sessions.')
     return '\n'.join(lines)
 
 

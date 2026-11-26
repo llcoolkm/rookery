@@ -10,7 +10,7 @@ from urllib.parse import urlsplit
 
 from .conversations import create_conversations_app
 from .core import Error
-from .hub import Hub, create_app
+from .hub import Hub, create_app, read_hash_file
 
 
 def listener(value):
@@ -73,8 +73,9 @@ async def serve(args):
         viewer = listener(args.conversations_listen)
         if viewer[0] not in {'127.0.0.1', '::1'} or viewer[1] == 0 or viewer[1] in {public[1], internal[1]}:
             raise Error('conversations requires a distinct port on 127.0.0.1 or ::1')
-        if not args.conversations_password_hash_file.is_file():
-            raise Error('private conversations password hash file is required')
+        hashes = read_hash_file(args.conversations_password_hash_file) or {}
+        if 'viewer' not in hashes or list(hashes.values()).count(hashes['viewer']) != 1:
+            raise Error('conversations password hash file must be private JSON with a unique viewer SHA-256 hash')
     if public == internal or args.snapshot_interval < 1 or not 1 <= args.snapshot_keep <= 3:
         raise Error('listeners must differ; snapshot interval >=1 and keep=1..3')
     tokens = Path(args.tokens)

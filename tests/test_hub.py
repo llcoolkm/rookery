@@ -44,24 +44,50 @@ class HubTests(unittest.TestCase):
     def messages(self, node='server'):
         return self.hub.call(node, 'status')['messages']
 
-    def test_publish_session_metadata_is_optional_validated_and_replaced(self):
-        metadata = {'waiting_for': 'permission', 'status_since': time.time(), 'tmux': 'dev team:3', 'cwd': '/home/km/work'}
+    def test_publish_drops_only_invalid_metadata_and_scopes_cwd(self):
+        metadata = {'waiting_for': 'permission', 'tmux': 'dev team:3', 'cwd': '/home/km/work'}
         session = {**self.a, 'status': 'waiting', **metadata}
         self.hub.call('server', 'publish', {'sessions': [session]})
 
-        def published():
-            return next(row for row in self.hub.call('laptop', 'list')['sessions'] if row['id'] == self.a['id'])
+        def published(node='server', op='list'):
+            return next(row for row in self.hub.call(node, op)['sessions'] if row['id'] == self.a['id'])
 
         self.assertEqual({key: published()[key] for key in metadata}, metadata)
+        self.assertEqual(published('laptop')['tmux'], metadata['tmux'])
+        self.assertEqual(published('laptop')['waiting_for'], metadata['waiting_for'])
+        self.assertEqual(published('laptop')['status_since'], published()['status_since'])
+        self.assertNotIn('cwd', published('laptop'))
+        self.assertNotIn('cwd', published('laptop', 'bootstrap'))
+        self.assertEqual(published('server', 'bootstrap')['cwd'], metadata['cwd'])
         invalid = [('waiting_for', None), ('waiting_for', 'å' * 65), ('waiting_for', '   '),
+                   ('waiting_for', 'approve\u202e now'),
                    ('tmux', 'dev:abc'), ('tmux', 'dev:1:2'), ('cwd', '/tmp/a\u009b'), ('cwd', 'a' * 513),
-                   ('status_since', True), ('status_since', -1), ('status_since', time.time() + 301)]
+                   ('cwd', '\ud800'), ('status_since', float('inf')),
+                   ('status_since', True), ('status_since', -1), ('status_since', time.time() + 600)]
+        since = published()['status_since']
         for field, value in invalid:
-            with self.subTest(field=field, value=value), self.assertRaisesRegex(Error, f'invalid session {field}'):
-                self.hub.call('server', 'publish', {'sessions': [{**session, field: value}]})
-        self.assertEqual({key: published()[key] for key in metadata}, metadata)
+            with self.subTest(field=field, value=value):
+                result = self.hub.call('server', 'publish', {'sessions': [{**session, field: value}]})
+                self.assertEqual(result, {'published': 1, 'invalid_metadata': 1})
+                self.assertEqual(published()['status_since'], since)
+                self.assertTrue(published()['online'])
+                if field != 'status_since':
+                    self.assertNotIn(field, published())
+                self.assertEqual({key: published()[key] for key in metadata if key != field},
+                                 {key: val for key, val in metadata.items() if key != field})
         self.hub.call('server', 'publish', {'sessions': [{**self.a, 'unrecognized': 'ignored'}]})
         self.assertFalse(set(published()) & (metadata.keys() | {'unrecognized'}))
+
+    def test_status_transition_time_survives_heartbeat_and_changes_with_status_or_pid(self):
+        now = time.time()
+        spec = {**self.a, 'status': 'busy'}
+        for offset, change, since in [(0, {}, 0), (2, {'status_since': now + 2}, 0),
+                                      (4, {'pid': 321}, 4), (6, {'status': 'waiting'}, 6), (8, {}, 6)]:
+            with self.subTest(offset=offset), patch('rookery.hub.time.time', return_value=now + offset):
+                spec.update(change)
+                self.hub.call('server', 'publish', {'sessions': [spec]})
+                row = next(row for row in self.hub.fleet_sessions() if row['id'] == self.a['id'])
+                self.assertEqual(row['status_since'], now + since)
 
     def test_answering_a_reply_sends_one_threaded_follow_up_ask(self):
         ask = self.send()

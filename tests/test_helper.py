@@ -168,19 +168,19 @@ class HelperTests(unittest.TestCase):
         self.assertEqual(sessions, [self.session, agy])
         self.assertEqual(errors, {})
 
-    def test_publishes_session_details_and_tracks_status_and_reused_pid(self):
+    def test_publishes_optional_session_details_without_a_client_timestamp(self):
         self.hub.call = Mock(return_value={})
         outside = {**self.session, 'id': str(uuid.uuid4()), 'pid': 888, 'cwd': '\x1b[2J'}
         self.session.update(provider='claude', status='waiting', waiting_for='permission', cwd='/home/km/arbete')
         self.helper.discover = lambda: ([self.session, outside], {})
         proc = {999: (777, 10), 777: (222, 5), 222: (1, 1), 888: (1, 20)}
         list_panes = subprocess.CompletedProcess([], 0, stdout='222 work in progress:3\n')
-        with patch('rookery.session_details.subprocess.run', return_value=list_panes) as tmux, \
-             patch('rookery.session_details._process', side_effect=proc.__getitem__), \
-             patch('rookery.daemon.time.time', return_value=100) as clock:
+        with patch('rookery.session_details.os.path.isfile', return_value=True), \
+             patch('rookery.session_details.subprocess.run', return_value=list_panes) as tmux, \
+             patch('rookery.session_details._process', side_effect=proc.__getitem__):
             self.helper.publish()
             rows = self.hub.call.call_args.args[1]['sessions']
-            self.assertEqual(rows[0]['status_since'], 100)
+            self.assertNotIn('status_since', rows[0])
             self.assertEqual(rows[0]['waiting_for'], 'permission')
             self.assertEqual(rows[0]['tmux'], 'work in progress:3')
             self.assertEqual(rows[0]['cwd'], '/home/km/arbete')
@@ -190,20 +190,9 @@ class HelperTests(unittest.TestCase):
             self.assertEqual(tmux.call_args.args[0],
                              ['tmux', 'list-panes', '-a', '-F', '#{pane_pid} #{session_name}:#{window_index}'])
 
-            clock.return_value = 110
-            self.helper.publish()
-            self.assertEqual(self.hub.call.call_args.args[1]['sessions'][0]['status_since'], 100)
-
-            clock.return_value = 120
             self.session['status'] = 'busy'
             self.helper.publish()
-            self.assertEqual(self.hub.call.call_args.args[1]['sessions'][0]['status_since'], 120)
             self.assertNotIn('waiting_for', self.hub.call.call_args.args[1]['sessions'][0])
-
-            clock.return_value = 130
-            proc[999] = (777, 30)
-            self.helper.publish()
-            self.assertEqual(self.hub.call.call_args.args[1]['sessions'][0]['status_since'], 130)
 
     def test_publish_preserves_discovery_if_optional_details_would_exceed_limit(self):
         self.hub.call = Mock(return_value={})

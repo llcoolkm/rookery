@@ -33,19 +33,37 @@ func showSessions(ctx context.Context, client *core.Client, args arguments) erro
 	stat, _ := os.Stdout.Stat()
 	term := os.Getenv("TERM")
 	redraw := interval > 0 && stat != nil && stat.Mode()&os.ModeCharDevice != 0 && term != "" && term != "dumb"
-	for {
+	return readSessions(ctx, os.Stdout, interval, redraw, func(ctx context.Context) (map[string]any, error) {
 		result, err := client.Invoke(ctx, "peers", nil)
+		if err != nil {
+			return nil, err
+		}
+		return result.(map[string]any), nil
+	})
+}
+
+func readSessions(ctx context.Context, out io.Writer, interval time.Duration, redraw bool, peers func(context.Context) (map[string]any, error)) error {
+	for {
+		directory, err := peers(ctx)
 		if ctx.Err() != nil {
 			return nil
 		}
-		if err != nil {
+		if interval == 0 && err != nil {
 			return err
 		}
 		if redraw {
-			fmt.Fprint(os.Stdout, "\033[H\033[J")
+			if _, err := fmt.Fprint(out, "\033[H\033[J"); err != nil {
+				return err
+			}
 		}
-		if err := writeSessions(os.Stdout, result.(map[string]any), float64(time.Now().Unix())); err != nil {
-			return err
+		if err != nil {
+			if _, err := fmt.Fprintf(out, "Could not read peer sessions: %v\n", err); err != nil {
+				return err
+			}
+		} else {
+			if err := writeSessions(out, directory, float64(time.Now().Unix())); err != nil {
+				return err
+			}
 		}
 		if interval == 0 {
 			return nil
@@ -124,9 +142,12 @@ func writeSessions(out io.Writer, directory map[string]any, now float64) error {
 		fmt.Fprintln(w, strings.Join(fields, "\t"))
 	}
 	if len(live) == 0 {
-		if directory["stale"] == true {
+		switch {
+		case directory["detail"] == "helper has not connected yet":
+			fmt.Fprintln(w, "Helper has not connected yet.")
+		case directory["stale"] == true:
 			fmt.Fprintln(w, "Peer data is stale.")
-		} else {
+		default:
 			fmt.Fprintln(w, "No live peer sessions.")
 		}
 	}

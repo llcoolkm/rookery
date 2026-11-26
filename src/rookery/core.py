@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 MAX_BYTES = 16384
+MAX_REQUEST = 256 * 1024
 MAX_HOPS = 6
 # Sends (asks and informs) live 12 hours: long enough to outlast a long turn
 # or a dialog left open overnight, short enough that yesterday's work is not

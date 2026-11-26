@@ -208,7 +208,8 @@ class MCPTests(unittest.TestCase):
 
     def test_peer_list_is_compact_and_health_identifies_caller(self):
         self.client.peers.return_value = {'sessions': [
-            {'key': 'server/codex:one', 'name': 'One', 'enrolled': True, 'pid': 42, 'socket_path': '/private', 'online': True},
+            {'key': 'server/codex:one', 'name': 'One', 'enrolled': True, 'pid': 42, 'socket_path': '/private', 'online': True,
+             'cwd': '/private/work', 'tmux': 'work:4', 'waiting_for': 'approval', 'status_since': 100},
             {'key': 'server/codex:two', 'name': 'Two', 'enrolled': False}], 'stale': False}
         response = self.request('tools/call', {'name': 'peers'})
         value = json.loads(response['result']['content'][0]['text'])

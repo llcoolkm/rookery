@@ -14,13 +14,12 @@ import urllib.error
 import urllib.request
 
 from .client import read_config
-from .core import Error
-from .hub import MAX_REQUEST
+from .core import Error, MAX_REQUEST
 from .local_store import Store
 from .common import NoRedirect, RemoteError, atomic
 from . import polling, providers, session_details
 
-# Bounded directory (4096 sessions) plus 128 messages, including worst-case
+# Bounded directory (4096 sessions with optional metadata) plus 128 messages, including worst-case
 # JSON escaping of 16 KiB bodies and 4096-character delivery details.
 MAX_RESPONSE = 32 * 1024 * 1024
 
@@ -140,7 +139,7 @@ class Helper:
         self.sync_error = None
         self.last_sync = 0
         self.sessions = []
-        self.session_transitions = {}
+        self.session_details = session_details.SessionDetails()
         self.errors = {}
         self.next_discovery = 0
         self.next_prune = 0
@@ -239,7 +238,7 @@ class Helper:
     def publish(self):
         self.sessions,self.errors = self.discover()
         fields = {'provider','id','name','status','pid','delivery'}
-        details, self.session_transitions = session_details.collect(self.sessions, self.session_transitions, time.time())
+        details = self.session_details.collect(self.sessions)
         # The trusted node states each session's admission policy; the hub
         # applies it rather than re-deriving provider behaviour.
         rows = [{**{k: v for k, v in s.items() if k in fields}, 'admission': providers.admission(s), **extra}
@@ -247,7 +246,7 @@ class Helper:
         payload = {'sessions': rows, 'errors': {k: 'discovery unavailable' for k in self.errors}}
         # Keep ordinary discovery working if a large snapshot's optional
         # details would push it over the hub's request limit.
-        for field in ('cwd', 'tmux', 'waiting_for', 'status_since'):
+        for field in ('cwd', 'tmux', 'waiting_for'):
             if len(_rpc_body('publish', payload)) <= MAX_REQUEST:
                 break
             for row in rows:
