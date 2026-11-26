@@ -222,8 +222,9 @@ func (p *proxy) call(method string, params, out any) error {
 }
 
 type Thread struct {
-	ID     string `json:"id"`
-	Name   string `json:"name"`
+	ID     string          `json:"id"`
+	Name   string          `json:"name"`
+	Cwd    json.RawMessage `json:"cwd,omitempty"`
 	Status struct {
 		Type  string            `json:"type"`
 		Flags []json.RawMessage `json:"activeFlags"`
@@ -248,7 +249,24 @@ func Normalize(t Thread) core.Session {
 	if name == "" {
 		name = t.ID
 	}
-	return core.Session{Provider: "codex", ID: t.ID, Name: name, Status: status}
+	s := core.Session{Provider: "codex", ID: t.ID, Name: name, Status: status}
+	_ = json.Unmarshal(t.Cwd, &s.Cwd)
+	if status == "waiting" {
+		for _, raw := range t.Status.Flags {
+			var flag string
+			if json.Unmarshal(raw, &flag) != nil {
+				continue
+			}
+			if flag == "waitingOnApproval" {
+				s.WaitingFor = "approval"
+				break
+			}
+			if flag == "waitingOnUserInput" {
+				s.WaitingFor = "user input"
+			}
+		}
+	}
+	return s
 }
 func (a *Adapter) Discover(ctx context.Context) (rowsOut []core.Session, discoveryErr error) {
 	defer func() {

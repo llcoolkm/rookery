@@ -852,6 +852,16 @@ Open `http://127.0.0.1:8789/` and sign in as `viewer` with the generated passwor
 Keep this listener off ingress and Services. It serves message contents to the
 viewer credential, independently of node credentials and monitoring access.
 
+The **Sessions** tab refreshes every five seconds and shows live sessions on
+every node, including published sessions awaiting enrollment. Use **Show offline**
+to include past session records. Metadata such as working directory and tmux
+coordinates appears when the provider and helper supply it.
+
+Run `rookery sessions` for the terminal table, or `rookery sessions --watch 5`
+to refresh it every five seconds. The terminal reads the local peers directory,
+which contains the node's sessions and enrolled peers. The hub viewer endpoint
+requires its own credential and includes the full published directory.
+
 ## Message safety and recovery
 
 Saved locally, accepted by the hub, received by a host, submitted to a provider,

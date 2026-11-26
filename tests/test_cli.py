@@ -53,6 +53,29 @@ class CliTests(unittest.TestCase):
                 self.assertNotIn("Traceback", error)
         self.assertFalse((Path(self.state) / "ledger.jsonl").exists())
 
+    def test_sessions_table_uses_peers_and_watches_until_interrupted(self):
+        client = Mock()
+        peers = {'sessions': [
+            dict(self.b, node='server', online=True),
+            dict(self.b, node='server02', online=True, provider='claude', status='waiting', name='alpha\x1b',
+                 waiting_for='permission', status_since=98, tmux='main:4', cwd='/tmp/work'),
+            dict(self.b, node='offline-only', online=False),
+        ]}
+        client.peers.return_value = peers
+        stdout = io.StringIO()
+        args = cli.parser().parse_args(['sessions', '--watch', '5'])
+        with patch('rookery.client.Client', return_value=client), patch('rookery.cli.time.time', return_value=100), \
+                patch('rookery.cli.time.sleep', side_effect=[None, KeyboardInterrupt]) as sleep, contextlib.redirect_stdout(stdout):
+            self.assertIsNone(cli.unified_run(args, self.state))
+        output = stdout.getvalue()
+        self.assertEqual(client.peers.call_count, 2)
+        self.assertEqual([call.args for call in sleep.call_args_list], [(5,), (5,)])
+        self.assertLess(output.index('alpha?'), output.index('beta'))
+        self.assertIn('permission', output)
+        self.assertIn('server02 main:4', output)
+        self.assertIn('2s', output)
+        self.assertNotIn('offline-only', output)
+
     def test_configure_explains_hash_handoff_without_exposing_token(self):
         import hashlib
         token = 'synthetic-onboarding-credential-' * 2

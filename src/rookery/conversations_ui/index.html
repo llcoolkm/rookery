@@ -5,12 +5,16 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Conversations · Rookery</title>
   <link rel="stylesheet" href="/style.css">
-  <script src="/app.js" defer></script>
+  <script src="/app.js" type="module"></script>
 </head>
 <body>
   <header class="topbar">
     <span class="brand">Rookery hub</span>
-    <h1>Conversations</h1>
+    <h1 id="dashboard-title" class="visually-hidden">Conversations</h1>
+    <nav class="dashboard-nav" aria-label="Rookery hub">
+      <a href="#conversations" id="conversations-link" aria-current="page">Conversations</a>
+      <a href="#sessions" id="sessions-link">Sessions</a>
+    </nav>
     <button type="button" id="refresh" class="button">Refresh</button>
   </header>
 
@@ -57,6 +61,32 @@
         <ol id="messages" class="messages"></ol>
       </div>
     </section>
+  </main>
+
+  <main class="session-view" id="session-view" aria-labelledby="session-title" hidden>
+    <div class="session-header">
+      <h2 id="session-title">Agent sessions</h2>
+      <label class="offline-toggle"><input type="checkbox" id="show-offline"> Show offline sessions</label>
+    </div>
+    <ul id="node-counts" class="node-counts" aria-label="Sessions per node"></ul>
+    <p id="session-feedback" class="feedback session-feedback" role="status">Loading sessions…</p>
+    <div id="session-table-scroll" class="session-table-scroll" role="region" aria-label="Session details" tabindex="0" hidden>
+      <table class="session-table" aria-labelledby="session-title">
+        <thead>
+          <tr>
+            <th scope="col">Node</th>
+            <th scope="col">Provider</th>
+            <th scope="col">Name</th>
+            <th scope="col">Status</th>
+            <th scope="col">Waiting for</th>
+            <th scope="col">Since change</th>
+            <th scope="col">tmux</th>
+            <th scope="col">Working directory</th>
+          </tr>
+        </thead>
+        <tbody id="session-rows"></tbody>
+      </table>
+    </div>
   </main>
 </body>
 </html>

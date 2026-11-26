@@ -3,6 +3,7 @@ import copy
 import http.client
 import json
 from pathlib import Path
+import subprocess
 import tempfile
 import time
 import unittest
@@ -166,6 +167,54 @@ class HelperTests(unittest.TestCase):
             sessions, errors = self.helper.discover_sessions()
         self.assertEqual(sessions, [self.session, agy])
         self.assertEqual(errors, {})
+
+    def test_publishes_session_details_and_tracks_status_and_reused_pid(self):
+        self.hub.call = Mock(return_value={})
+        outside = {**self.session, 'id': str(uuid.uuid4()), 'pid': 888, 'cwd': '\x1b[2J'}
+        self.session.update(provider='claude', status='waiting', waiting_for='permission', cwd='/home/km/arbete')
+        self.helper.discover = lambda: ([self.session, outside], {})
+        proc = {999: (777, 10), 777: (222, 5), 222: (1, 1), 888: (1, 20)}
+        list_panes = subprocess.CompletedProcess([], 0, stdout='222 work in progress:3\n')
+        with patch('rookery.session_details.subprocess.run', return_value=list_panes) as tmux, \
+             patch('rookery.session_details._process', side_effect=proc.__getitem__), \
+             patch('rookery.daemon.time.time', return_value=100) as clock:
+            self.helper.publish()
+            rows = self.hub.call.call_args.args[1]['sessions']
+            self.assertEqual(rows[0]['status_since'], 100)
+            self.assertEqual(rows[0]['waiting_for'], 'permission')
+            self.assertEqual(rows[0]['tmux'], 'work in progress:3')
+            self.assertEqual(rows[0]['cwd'], '/home/km/arbete')
+            self.assertNotIn('tmux', rows[1])
+            self.assertNotIn('cwd', rows[1])
+            tmux.assert_called_once()
+            self.assertEqual(tmux.call_args.args[0],
+                             ['tmux', 'list-panes', '-a', '-F', '#{pane_pid} #{session_name}:#{window_index}'])
+
+            clock.return_value = 110
+            self.helper.publish()
+            self.assertEqual(self.hub.call.call_args.args[1]['sessions'][0]['status_since'], 100)
+
+            clock.return_value = 120
+            self.session['status'] = 'busy'
+            self.helper.publish()
+            self.assertEqual(self.hub.call.call_args.args[1]['sessions'][0]['status_since'], 120)
+            self.assertNotIn('waiting_for', self.hub.call.call_args.args[1]['sessions'][0])
+
+            clock.return_value = 130
+            proc[999] = (777, 30)
+            self.helper.publish()
+            self.assertEqual(self.hub.call.call_args.args[1]['sessions'][0]['status_since'], 130)
+
+    def test_publish_preserves_discovery_if_optional_details_would_exceed_limit(self):
+        self.hub.call = Mock(return_value={})
+        self.session.update(status='waiting', waiting_for='approval', cwd='/' + 'å' * 255)
+        with patch('rookery.session_details._list_panes', return_value={}), \
+             patch('rookery.daemon.MAX_REQUEST', 500):
+            self.helper.publish()
+        row = self.hub.call.call_args.args[1]['sessions'][0]
+        self.assertEqual(row['id'], self.session['id'])
+        self.assertEqual(row['waiting_for'], 'approval')
+        self.assertNotIn('cwd', row)
 
     def test_explicit_polling_registration_overrides_native_discovery(self):
         polling = {'provider': 'codex', 'id': self.session['id'], 'name': 'Codex polling',

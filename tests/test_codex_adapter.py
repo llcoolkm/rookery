@@ -16,6 +16,14 @@ class AdapterTests(unittest.TestCase):
         for flag in ['waitingOnApproval','waitingOnUserInput','newUnknownFlag']:
             self.assertEqual(adapter.normalize({'id':ID,'status':{'type':'active','activeFlags':[flag]}})['status'],'waiting')
 
+    def test_waiting_reason_uses_recognized_codex_flags_only(self):
+        for flags, reason in [(['waitingOnApproval'], 'approval'), (['waitingOnUserInput'], 'user input'),
+                              (['waitingOnUserInput', 'waitingOnApproval'], 'approval'), (['newUnknownFlag'], None)]:
+            with self.subTest(flags=flags):
+                session = adapter.normalize({'id': ID, 'status': {'type': 'active', 'activeFlags': flags}})
+                self.assertEqual(session['status'], 'waiting')
+                self.assertEqual(session.get('waiting_for'), reason)
+
     @patch.object(adapter.subprocess, 'run')
     @patch.object(adapter, 'Proxy')
     def test_waiting_is_never_submitted(self, proxy, run):

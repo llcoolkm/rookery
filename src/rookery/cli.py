@@ -3,6 +3,7 @@ import argparse
 import json
 import os
 import sys
+import time
 from .core import Error, REPLY_TTL, SEND_TTL
 
 
@@ -12,6 +13,8 @@ def parser():
     p.add_argument("--as", dest="actor", default=os.environ.get("ROOKERY_SESSION", "operator"), help="enrolled provider:session-id; identity is a same-user assertion")
     sub = p.add_subparsers(dest="command", required=True)
     sub.add_parser("list", help="discover live sessions")
+    sessions = sub.add_parser("sessions", help="show live peer sessions as a table")
+    sessions.add_argument("--watch", type=int, metavar="SECONDS", help="refresh every 1–3600 seconds")
     e = sub.add_parser("enroll", help="opt a live session into receiving")
     e.add_argument("target")
     e.add_argument("--alias", help="friendly name bound to this exact session")
@@ -161,6 +164,8 @@ def unified_run(args,path):
     command = args.command
     if command == 'list':
         return client.peers()
+    if command == 'sessions':
+        return show_sessions(client, args.watch)
     if command == 'health':
         return client.status()
     if command == 'doctor':
@@ -207,6 +212,41 @@ def unified_run(args,path):
             time.sleep(.2)
         raise Error('wait timed out; message was not resent')
     raise Error('unknown command: '+command)
+
+
+def show_sessions(client, interval):
+    if interval is not None and not 1 <= interval <= 3600:
+        raise Error('--watch must be between 1 and 3600 seconds')
+    try:
+        while True:
+            if interval and sys.stdout.isatty() and os.environ.get('TERM', 'dumb') != 'dumb':
+                print('\033[H\033[J', end='')
+            print(session_table(client.peers(), time.time()), flush=True)
+            if interval is None:
+                return
+            time.sleep(interval)
+    except KeyboardInterrupt:
+        return
+
+
+def session_table(directory, now):
+    states = {'waiting': 0, 'busy': 1, 'idle': 2, 'unknown': 3}
+    sessions = sorted((row for row in directory.get('sessions', []) if row.get('online')),
+                      key=lambda row: (states.get(row.get('status'), 3), row['node'], row['provider'], row['name'], row['id']))
+    rows = [('Node', 'Provider', 'Name', 'Status', 'Waiting for', 'Since', 'Tmux', 'Cwd')]
+    for row in sessions:
+        since = row.get('status_since')
+        age = max(0, int(now - since)) if type(since) in (int, float) else None
+        values = (row['node'], row['provider'], row['name'], row['status'],
+                  row.get('waiting_for') if row['status'] == 'waiting' else None,
+                  f'{age}s' if age is not None else None,
+                  f"{row['node']} {row['tmux']}" if row.get('tmux') else None, row.get('cwd'))
+        rows.append(tuple(''.join(c if c.isprintable() else '?' for c in value) if value else '—' for value in values))
+    widths = [max(map(len, column)) for column in zip(*rows)]
+    lines = ['  '.join(value.ljust(width) for value, width in zip(row, widths)).rstrip() for row in rows]
+    if not sessions:
+        lines.append('No live peer sessions.' if not directory.get('stale') else 'Peer data is stale.')
+    return '\n'.join(lines)
 
 
 def main():

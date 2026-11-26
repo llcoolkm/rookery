@@ -71,6 +71,12 @@ type Process interface {
 	CommandLine(context.Context, ProcessRef) ([]string, error)
 }
 
+// TmuxPanes is an optional process inspection capability for platforms with
+// native tmux. The snapshot maps pane process IDs to session:window coordinates.
+type TmuxPanes interface {
+	TmuxPanes(context.Context) map[int]string
+}
+
 // Spec describes direct native execution. Path is an absolute platform-validated
 // executable path; no shell or fallback. Windows refuses .cmd/.bat regardless of
 // case, shell interpreters and shell/PATHEXT resolution. Windows args contain

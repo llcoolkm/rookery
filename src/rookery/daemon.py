@@ -15,13 +15,18 @@ import urllib.request
 
 from .client import read_config
 from .core import Error
+from .hub import MAX_REQUEST
 from .local_store import Store
 from .common import NoRedirect, RemoteError, atomic
-from . import polling, providers
+from . import polling, providers, session_details
 
 # Bounded directory (4096 sessions) plus 128 messages, including worst-case
 # JSON escaping of 16 KiB bodies and 4096-character delivery details.
 MAX_RESPONSE = 32 * 1024 * 1024
+
+
+def _rpc_body(op, data):
+    return json.dumps({'op': op, 'data': data}, allow_nan=False).encode()
 
 
 class HubClient:
@@ -31,7 +36,7 @@ class HubClient:
 
     def call(self, op, data=None):
         req = urllib.request.Request(self.config['url']+'/v2/rpc',
-            data=json.dumps({'op':op,'data':data or {}},allow_nan=False).encode(),
+            data=_rpc_body(op, data or {}),
             headers={'Authorization':'Bearer '+self.config['token'],'Content-Type':'application/json'})
         try:
             response = self.opener.open(req,timeout=35)
@@ -135,6 +140,7 @@ class Helper:
         self.sync_error = None
         self.last_sync = 0
         self.sessions = []
+        self.session_transitions = {}
         self.errors = {}
         self.next_discovery = 0
         self.next_prune = 0
@@ -233,11 +239,20 @@ class Helper:
     def publish(self):
         self.sessions,self.errors = self.discover()
         fields = {'provider','id','name','status','pid','delivery'}
+        details, self.session_transitions = session_details.collect(self.sessions, self.session_transitions, time.time())
         # The trusted node states each session's admission policy; the hub
         # applies it rather than re-deriving provider behaviour.
-        published = self.client.call('publish',{'sessions':[{**{k:v for k,v in s.items() if k in fields},
-                                                  'admission':providers.admission(s)} for s in self.sessions],
-                                 'errors':{k:'discovery unavailable' for k in self.errors}})
+        rows = [{**{k: v for k, v in s.items() if k in fields}, 'admission': providers.admission(s), **extra}
+                for s, extra in zip(self.sessions, details)]
+        payload = {'sessions': rows, 'errors': {k: 'discovery unavailable' for k in self.errors}}
+        # Keep ordinary discovery working if a large snapshot's optional
+        # details would push it over the hub's request limit.
+        for field in ('cwd', 'tmux', 'waiting_for', 'status_since'):
+            if len(_rpc_body('publish', payload)) <= MAX_REQUEST:
+                break
+            for row in rows:
+                row.pop(field, None)
+        published = self.client.call('publish', payload)
         if published.get('refused'):
             self.errors['hub'] = 'hub session quota reached; new sessions were not advertised'
         self.next_discovery = time.monotonic()+15

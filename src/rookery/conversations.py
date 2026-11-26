@@ -17,6 +17,7 @@ LOCAL_HOST = re.compile(rb"(?:localhost|127\.0\.0\.1|\[::1\])(?::[0-9]{1,5})?", 
 ASSETS = {
     "/": ("index.html", b"text/html; charset=utf-8"),
     "/app.js": ("app.js", b"text/javascript; charset=utf-8"),
+    "/sessions.js": ("sessions.js", b"text/javascript; charset=utf-8"),
     "/style.css": ("style.css", b"text/css; charset=utf-8"),
 }
 
@@ -165,6 +166,8 @@ def create_conversations_app(hub, password_hashes):
                 await respond(200, *assets[path])
             elif path == "/api/conversations":
                 await respond(200, await asyncio.to_thread(_thread_page, hub, scope.get("query_string", b"")))
+            elif path == "/sessions":
+                await respond(200, {"sessions": await asyncio.to_thread(hub.fleet_sessions)})
             elif path.startswith("/api/conversations/"):
                 result = await asyncio.to_thread(_transcript, hub, path.removeprefix("/api/conversations/"))
                 if result["messages"]:

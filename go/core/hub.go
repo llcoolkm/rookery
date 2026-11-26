@@ -14,6 +14,7 @@ import (
 )
 
 const MaxResponse = 32 << 20
+const maxRequestBytes = 256 << 10
 
 // RemoteError is a definite rejection; every other error retains the command.
 type RemoteError struct{ Text string }
@@ -73,7 +74,7 @@ func (h *HTTPHub) Call(ctx context.Context, r RPCRequest) (json.RawMessage, erro
 	if e != nil {
 		return nil, &RemoteError{"invalid request fields"}
 	}
-	if len(body) > 262144 {
+	if len(body) > maxRequestBytes {
 		return nil, &RemoteError{"request too large"}
 	}
 	req, e := http.NewRequestWithContext(ctx, "POST", h.origin+"/v2/rpc", bytes.NewReader(body))

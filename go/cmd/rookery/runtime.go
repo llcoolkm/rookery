@@ -31,7 +31,7 @@ type arguments struct {
 func parse(args []string) (arguments, error) {
 	a := arguments{options: map[string]string{}}
 	bools := map[string]bool{"once": true, "peek": true, "allow-http-loopback": true, "apply": true, "accept-inbound": true, "dry-run": true, "detach": true, "receipt": true, "status": true, "foreground": true, "agy-ready": true}
-	values := map[string]bool{"state-dir": true, "as": true, "node": true, "url": true, "token-file": true, "provider": true, "session": true, "to": true, "body": true, "kind": true, "ttl": true, "id": true, "limit": true, "alias": true, "pid": true, "name": true, "backend": true, "executable": true, "user": true, "path": true, "timeout": true, "session-allowlist": true, "conversation": true}
+	values := map[string]bool{"state-dir": true, "as": true, "node": true, "url": true, "token-file": true, "provider": true, "session": true, "to": true, "body": true, "kind": true, "ttl": true, "id": true, "limit": true, "alias": true, "pid": true, "name": true, "backend": true, "executable": true, "user": true, "path": true, "timeout": true, "session-allowlist": true, "conversation": true, "watch": true}
 	for i := 0; i < len(args); i++ {
 		s := args[i]
 		if strings.HasPrefix(s, "--") {
@@ -347,6 +347,8 @@ func runPlatform(ctx context.Context, args []string) (any, error) {
 		}
 		params["target"] = a.pos(0)
 	case "inbox", "list", "health":
+	case "sessions":
+		return nil, showSessions(ctx, client, a)
 	case "doctor":
 		health, e := client.Invoke(ctx, "health", nil)
 		if e != nil {

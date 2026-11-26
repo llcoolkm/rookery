@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import stat
 import tempfile
+import time
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -147,6 +148,34 @@ class HttpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.hub.api_request_counts, {('POST', 200): 1})
         self.assertIn('rookery_hub_api_requests_total{method="POST",code="200"} 1', self.hub.metrics())
         self.assertGreater(sum(self.hub.request_counts.values()), 1)
+
+    async def test_sessions_requires_viewer_and_includes_unenrolled_remote_and_offline_rows(self):
+        hashes = self.root / 'viewer.json'
+        hashes.write_text(json.dumps({'viewer': hashlib.sha256(self.token.encode()).hexdigest()}))
+        hashes.chmod(0o600)
+        app = create_conversations_app(self.hub, hashes)
+        host = (b'host', b'127.0.0.1:8789')
+        auth = (b'authorization', b'Basic ' + base64.b64encode(f'viewer:{self.token}'.encode()))
+        for listener, code in ((app, 401), (self.app, 404), (self.internal, 404)):
+            status, _ = await self.request(app=listener, path='/sessions', method='GET', extra_headers=(host,))
+            self.assertEqual(status, code)
+
+        claude, codex = str(uuid.uuid4()), str(uuid.uuid4())
+        stamp = time.time()
+        self.hub.call('server', 'publish', {'sessions': [{
+            'id': claude, 'provider': 'claude', 'status': 'waiting', 'waiting_for': 'permission',
+            'tmux': 'work:2', 'cwd': '/home/km/project', 'status_since': stamp, 'pid': 42,
+        }]})
+        self.hub.call('server02', 'publish', {'sessions': [{'id': codex, 'provider': 'codex', 'status': 'busy'}]})
+        self.hub.call('server02', 'publish', {'sessions': []})
+        self.assertEqual([row['id'] for row in self.hub.call('server02', 'list')['sessions']], [codex])
+        status, body = await self.request(app=app, path='/sessions', method='GET', auth=False, extra_headers=(host, auth))
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body), {'sessions': [
+            {'node': 'server', 'id': claude, 'provider': 'claude', 'name': claude, 'status': 'waiting', 'online': True,
+             'waiting_for': 'permission', 'tmux': 'work:2', 'cwd': '/home/km/project', 'status_since': stamp},
+            {'node': 'server02', 'id': codex, 'provider': 'codex', 'name': codex, 'status': 'unknown', 'online': False},
+        ]})
 
     async def test_longpoll_yields_to_publication_and_returns_incremental_directory_event(self):
         cursor = self.hub.call('server', 'sync')['cursor']

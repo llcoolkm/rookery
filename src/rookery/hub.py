@@ -37,6 +37,8 @@ MAX_REQUEST = 256 * 1024
 TERMINAL = {"submitted", "uncertain", "failed", "acknowledged", "replied", "expired", "cancelled"}
 MUTATIONS = {"enroll", "disable", "clear-alias", "send", "reply", "ack", "read", "received", "result", "reconcile"}
 ALIAS = re.compile(r"[a-z][a-z0-9_-]{0,63}\Z")
+SESSION_TEXT_LIMITS = {"waiting_for": 128, "tmux": 128, "cwd": 512}
+SESSION_CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 MAX_REQUESTS_PER_NODE = 10000
 MAX_REQUESTS = 50000
 MAX_SESSIONS_PER_NODE = 512
@@ -374,8 +376,11 @@ class Hub:
         return {"waiting": "waiting on a dialog", "busy": "busy", "idle": "idle"}.get(data.get("status"), "unknown")
 
     @staticmethod
-    def _directory(db, node):
-        rows = db.execute("SELECT * FROM sessions WHERE node=? OR enrolled=1 ORDER BY node,key", (node,)).fetchall()
+    def _directory(db, node=None):
+        if node is None:
+            rows = db.execute("SELECT * FROM sessions ORDER BY node,key")
+        else:
+            rows = db.execute("SELECT * FROM sessions WHERE node=? OR enrolled=1 ORDER BY node,key", (node,))
         now, result = time.time(), []
         for row in rows:
             data = json.loads(row["data"])
@@ -391,6 +396,12 @@ class Hub:
                     data["delivery_blocker"] = "session PID changed; re-enroll this exact session"
             result.append(data)
         return result
+
+    def fleet_sessions(self):
+        fields = ("node", "provider", "id", "name", "status", "online", "status_since", *SESSION_TEXT_LIMITS)
+        with self._tx(write=False) as db:
+            return [{field: session[field] for field in fields if field in session}
+                    for session in self._directory(db)]
 
     def call(self, node, op, data=None):
         if not isinstance(node, str) or not NODE.fullmatch(node) or not isinstance(op, str):
@@ -470,6 +481,19 @@ class Hub:
                     raise Error("invalid session name")
                 value = {"key": key, "node": node, "provider": item["provider"], "id": item["id"],
                          "name": name, "status": item["status"]}
+                for field, limit in SESSION_TEXT_LIMITS.items():
+                    if field in item:
+                        text = item[field]
+                        if (not isinstance(text, str) or not text.strip() or len(text.encode()) > limit
+                                or SESSION_CONTROL.search(text)
+                                or (field == "tmux" and not re.fullmatch(r"[^:]+:[0-9]+", text))):
+                            raise Error(f"invalid session {field}")
+                        value[field] = text
+                if "status_since" in item:
+                    stamp = item["status_since"]
+                    if not number(stamp) or not 0 <= stamp <= now + CLOCK_SKEW:
+                        raise Error("invalid session status_since")
+                    value["status_since"] = stamp
                 if "pid" in item:
                     value["pid"] = integer(item["pid"], 1, 2**31 - 1)
                 if item.get("delivery") in {"polling", "attached"}:

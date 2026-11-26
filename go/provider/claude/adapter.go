@@ -70,10 +70,12 @@ func (a *Adapter) Admission(s core.Session) provider.Admission {
 }
 
 type row struct {
-	PID    int    `json:"pid"`
-	ID     string `json:"sessionId"`
-	Name   string `json:"name"`
-	Status string `json:"status"`
+	PID        int             `json:"pid"`
+	ID         string          `json:"sessionId"`
+	Name       string          `json:"name"`
+	Status     string          `json:"status"`
+	WaitingFor json.RawMessage `json:"waitingFor,omitempty"`
+	Cwd        json.RawMessage `json:"cwd,omitempty"`
 }
 
 func (a *Adapter) rows(ctx context.Context) ([]row, error) {
@@ -215,6 +217,10 @@ func (a *Adapter) Discover(ctx context.Context) ([]core.Session, error) {
 			status = "unknown"
 		}
 		s := core.Session{ProcessRef: &pin, Provider: "claude", ID: r.ID, Name: r.Name, PID: r.PID, Status: status}
+		if status == "waiting" {
+			_ = json.Unmarshal(r.WaitingFor, &s.WaitingFor)
+		}
+		_ = json.Unmarshal(r.Cwd, &s.Cwd)
 		s.Admission = string(a.Admission(s))
 		sessions = append(sessions, s)
 		var file platform.File

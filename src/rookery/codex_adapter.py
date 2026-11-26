@@ -101,10 +101,16 @@ def normalize(thread: dict) -> dict:
         status = 'idle'
     elif kind == 'active':
         status = 'waiting' if flags else 'busy'
-    return {'provider': 'codex', 'id': thread['id'],
-            'name': thread.get('name') or thread['id'], 'status': status,
-            'raw_status': raw, 'cwd': thread.get('cwd'),
-            'can_accept_direct_input': thread.get('canAcceptDirectInput')}
+    session = {'provider': 'codex', 'id': thread['id'],
+               'name': thread.get('name') or thread['id'], 'status': status,
+               'raw_status': raw, 'cwd': thread.get('cwd'),
+               'can_accept_direct_input': thread.get('canAcceptDirectInput')}
+    if status == 'waiting' and isinstance(flags, list):
+        if 'waitingOnApproval' in flags:
+            session['waiting_for'] = 'approval'
+        elif 'waitingOnUserInput' in flags:
+            session['waiting_for'] = 'user input'
+    return session
 
 
 def discover() -> list[dict]:

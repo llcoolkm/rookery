@@ -369,6 +369,20 @@ func TestNormalizeStates(t *testing.T) {
 	}
 }
 
+func TestNormalizeWaitingReasonAndCwd(t *testing.T) {
+	var thread Thread
+	if err := json.Unmarshal([]byte(`{"id":"`+testID+`","cwd":"/workspace","status":{"type":"active","activeFlags":["waitingOnUserInput","waitingOnApproval"]}}`), &thread); err != nil {
+		t.Fatal(err)
+	}
+	if s := Normalize(thread); s.Status != "waiting" || s.WaitingFor != "approval" || s.Cwd != "/workspace" {
+		t.Fatalf("missing approval or working directory: %+v", s)
+	}
+	thread.Status.Flags = []json.RawMessage{json.RawMessage(`"waitingOnUserInput"`)}
+	if s := Normalize(thread); s.Status != "waiting" || s.WaitingFor != "user input" {
+		t.Fatalf("missing user input reason: %+v", s)
+	}
+}
+
 var _ io.ReadWriteCloser = (*fakeConn)(nil)
 
 func TestRediscoveryCannotReplaceClaimProcessPin(t *testing.T) {

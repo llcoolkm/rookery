@@ -1,4 +1,4 @@
-"use strict";
+import {refreshSessions, showSessions} from "/sessions.js";
 
 const workspace = document.querySelector(".workspace");
 const filters = document.querySelector("#filters");
@@ -12,6 +12,9 @@ const transcriptScroll = document.querySelector("#transcript-scroll");
 const transcriptTitle = document.querySelector("#transcript-title");
 const participants = document.querySelector("#participants");
 const transcriptFeedback = document.querySelector("#transcript-feedback");
+const dashboardTitle = document.querySelector("#dashboard-title");
+const conversationsLink = document.querySelector("#conversations-link");
+const sessionsLink = document.querySelector("#sessions-link");
 
 const threadDate = new Intl.DateTimeFormat(undefined, {month: "short", day: "numeric", hour: "numeric", minute: "2-digit"});
 const fullDate = new Intl.DateTimeFormat(undefined, {dateStyle: "medium", timeStyle: "short"});
@@ -232,11 +235,27 @@ filters.addEventListener("submit", event => {
   }
   loadThreads();
 });
-refresh.addEventListener("click", () => loadThreads());
+refresh.addEventListener("click", () => {
+  if (workspace.hidden) refreshSessions();
+  else loadThreads();
+});
 loadOlder.addEventListener("click", () => loadThreads(true));
 back.addEventListener("click", () => {
   workspace.classList.remove("thread-open");
   threads.get(selectedId)?.button.focus();
 });
 
-loadThreads();
+function showPage() {
+  const sessions = location.hash === "#sessions";
+  workspace.hidden = sessions;
+  const title = sessions ? "Sessions" : "Conversations";
+  dashboardTitle.textContent = title;
+  document.title = title + " · Rookery";
+  (sessions ? conversationsLink : sessionsLink).removeAttribute("aria-current");
+  (sessions ? sessionsLink : conversationsLink).setAttribute("aria-current", "page");
+  showSessions(sessions);
+  if (!sessions && !listRequest) loadThreads();
+}
+
+window.addEventListener("hashchange", showPage);
+showPage();

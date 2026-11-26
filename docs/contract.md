@@ -106,7 +106,7 @@ universally rejected; do not invent stricter hub behavior.
 
 | Operation | Data | Result and rules | Source |
 | --- | --- | --- | --- |
-| `publish` | `sessions:[{provider,id,status,name?,pid?,delivery?,admission?}]`; helper also sends sanitized `errors` | `{published:N,refused?:N}`. Status is idle/busy/waiting/unknown; positive PID ≤2^31−1; delivery polling/attached when recognized; admission idle/busy/none. Invalid admission fails atomically. Publication replaces live presence for the node, never enrolls new sessions; an enrolled resumed UUID with changed PID is repinned. New-session quota refusals preserve existing sessions and heartbeat. | `src/rookery/hub.py:423`, `src/rookery/hub.py:471`, `src/rookery/daemon.py:216` |
+| `publish` | `sessions:[{provider,id,status,name?,pid?,delivery?,admission?,waiting_for?,status_since?,tmux?,cwd?}]`; helper also sends sanitized `errors` | `{published:N,refused?:N}`. Status is idle/busy/waiting/unknown; positive PID ≤2^31−1; delivery polling/attached when recognized; admission idle/busy/none. Invalid admission or session metadata fails atomically. Publication replaces live presence for the node, never enrolls new sessions; an enrolled resumed UUID with changed PID is repinned. New-session quota refusals preserve existing sessions and heartbeat. | `src/rookery/hub.py`, `src/rookery/daemon.py` |
 | `enroll` | `target`, `alias?` | `{enrolled:ADDRESS,alias:STRING_OR_NULL}`. Owned discovered live session, fresh within 60s. Alias matches `[a-z][a-z0-9_-]{0,63}`, unique within node; omitted alias preserves old value. | `src/rookery/hub.py:38`, `src/rookery/hub.py:511` |
 | `disable` | `target` | `{disabled:ADDRESS,alias:STRING_OR_NULL}`. Clears enrollment, preserves alias/history. Target resolved within owner node. | `src/rookery/hub.py:511` |
 | `clear-alias` | exact owned `target` | `{target:ADDRESS,cleared_alias:STRING_OR_NULL}`. Works offline/disabled; aliases are not accepted as selectors here. | `src/rookery/hub.py:500` |
@@ -123,6 +123,22 @@ universally rejected; do not invent stricter hub behavior.
 | `result` | `message_id,claim_id,status,detail?=""` | `{message_id,status,received_by_host}`. Matching claim, status submitted/held/failed/uncertain, detail ≤4096 characters. Applies only while dispatching; held restores read if read_at exists, otherwise pending. | `src/rookery/hub.py:638` |
 | `ack` | `actor,message_id` | Same delivery result shape. Enrolled addressed recipient only; active message becomes acknowledged unless already acknowledged/replied. Expired/cancelled messages fail with `message is no longer active`. | `src/rookery/hub.py:638` |
 | `reconcile` | `message_id,action:"cancel"` | Same delivery result shape. Recipient node only; explicit cancellation preserves acknowledged/replied/cancelled, otherwise sets cancelled. | `src/rookery/hub.py:638` |
+
+Optional session metadata is replaced on each publication. Missing fields from
+older helpers are valid, and unknown fields are ignored.
+
+| Field | Wire rule |
+| --- | --- |
+| `waiting_for` | Provider-reported reason for a waiting status, up to 128 UTF-8 bytes. |
+| `status_since` | Finite, nonnegative Unix seconds for the first observation of the current status in the helper, with at most five minutes of future clock skew. A new helper process starts a fresh observation. |
+| `tmux` | `session:window`, with a nonempty session name without colons and a decimal window index, up to 128 UTF-8 bytes. Emitted when the helper can match an owned session process or its ancestor to a tmux pane. |
+| `cwd` | Provider-reported working directory, up to 512 UTF-8 bytes. |
+
+Text values must be nonblank and contain no C0, DEL or C1 control characters.
+The authenticated operator listener serves `GET /sessions` as
+`{sessions:[{node,provider,id,name,status,online,waiting_for?,status_since?,tmux?,cwd?}]}`.
+It includes all published rows, with offline status `unknown`. The node RPC
+`list` keeps its existing directory visibility.
 
 MESSAGE contains `v:1,id,sender,recipient,body,kind,in_reply_to,ttl,
 requested_expires,created,expires,conversation,hops,status,received_by_host,updated`.

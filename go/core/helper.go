@@ -34,6 +34,7 @@ type Helper struct {
 	directoryLoaded  uint64
 	directoryReady   bool
 	nextDiscovery    time.Time
+	observations     map[string]sessionObservation
 	BusyDelivery     []string
 	// AutoEnroll reports the node's auto-enroll setting; it is read on every
 	// discovery, so switching it needs no restart. Nil means off.
@@ -174,23 +175,37 @@ func (h *Helper) Publish(ctx context.Context) error {
 	if h.Native.Discover != nil {
 		sessions, errs = h.Native.Discover(ctx)
 	}
-	h.Sessions = sessions
 	h.ProviderErrors = errs
 	if len(sessions) > 128 {
 		return errors.New("provider discovery exceeds publish limit")
 	}
+	sessions = h.observeSessions(ctx, sessions, seconds())
+	h.Sessions = sessions
 	rows := []map[string]any{}
 	for _, s := range sessions {
-		row := map[string]any{"provider": s.Provider, "id": s.ID, "name": s.Name, "status": s.Status, "admission": s.Admission}
+		row := map[string]any{"provider": s.Provider, "id": s.ID, "name": s.Name, "status": s.Status, "admission": s.Admission, "status_since": s.StatusSince}
 		if s.PID > 0 {
 			row["pid"] = s.PID
 		}
 		if s.Delivery != "" {
 			row["delivery"] = s.Delivery
 		}
+		if s.WaitingFor != "" {
+			row["waiting_for"] = s.WaitingFor
+		}
+		if s.Tmux != "" {
+			row["tmux"] = s.Tmux
+		}
+		if s.Cwd != "" {
+			row["cwd"] = s.Cwd
+		}
 		rows = append(rows, row)
 	}
-	if e := RPC(ctx, h.Hub, "publish", map[string]any{"sessions": rows, "errors": errs}, nil); e != nil {
+	request, e := sessionPublishRequest(rows, errs)
+	if e != nil {
+		return e
+	}
+	if _, e = h.Hub.Call(ctx, request); e != nil {
 		return e
 	}
 	h.nextDiscovery = time.Now().Add(15 * time.Second)

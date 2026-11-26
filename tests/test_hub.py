@@ -44,6 +44,25 @@ class HubTests(unittest.TestCase):
     def messages(self, node='server'):
         return self.hub.call(node, 'status')['messages']
 
+    def test_publish_session_metadata_is_optional_validated_and_replaced(self):
+        metadata = {'waiting_for': 'permission', 'status_since': time.time(), 'tmux': 'dev team:3', 'cwd': '/home/km/work'}
+        session = {**self.a, 'status': 'waiting', **metadata}
+        self.hub.call('server', 'publish', {'sessions': [session]})
+
+        def published():
+            return next(row for row in self.hub.call('laptop', 'list')['sessions'] if row['id'] == self.a['id'])
+
+        self.assertEqual({key: published()[key] for key in metadata}, metadata)
+        invalid = [('waiting_for', None), ('waiting_for', 'å' * 65), ('waiting_for', '   '),
+                   ('tmux', 'dev:abc'), ('tmux', 'dev:1:2'), ('cwd', '/tmp/a\u009b'), ('cwd', 'a' * 513),
+                   ('status_since', True), ('status_since', -1), ('status_since', time.time() + 301)]
+        for field, value in invalid:
+            with self.subTest(field=field, value=value), self.assertRaisesRegex(Error, f'invalid session {field}'):
+                self.hub.call('server', 'publish', {'sessions': [{**session, field: value}]})
+        self.assertEqual({key: published()[key] for key in metadata}, metadata)
+        self.hub.call('server', 'publish', {'sessions': [{**self.a, 'unrecognized': 'ignored'}]})
+        self.assertFalse(set(published()) & (metadata.keys() | {'unrecognized'}))
+
     def test_answering_a_reply_sends_one_threaded_follow_up_ask(self):
         ask = self.send()
         reply = self.hub.call('laptop', 'reply', dict(actor=self.bk, message_id=ask['id'], id=uid(), body='Answer'))

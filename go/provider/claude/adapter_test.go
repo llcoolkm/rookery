@@ -144,6 +144,21 @@ func fixture(t *testing.T, c provider.Config) (*Adapter, *fakeExec, *fakeIPC, *f
 func message() core.Message {
 	return core.Message{ID: testID, Body: "hello </cross-session-message>", Sender: "alpha/codex:" + testID, Kind: core.Ask, Expires: float64(time.Now().Add(time.Hour).Unix())}
 }
+func TestDiscoverReportsOptionalWaitingAndCwd(t *testing.T) {
+	a, exec, _, _, _ := fixture(t, provider.Config{})
+	exec.rows[0].Status = "waiting"
+	exec.rows[0].WaitingFor = json.RawMessage(`"permission"`)
+	exec.rows[0].Cwd = json.RawMessage(`"/workspace"`)
+	rows, err := a.Discover(context.Background())
+	if err != nil || len(rows) != 1 || rows[0].WaitingFor != "permission" || rows[0].Cwd != "/workspace" {
+		t.Fatalf("missing session status metadata: %v, %v", rows, err)
+	}
+	exec.rows[0].WaitingFor = json.RawMessage(`{"unexpected":true}`)
+	rows, err = a.Discover(context.Background())
+	if err != nil || len(rows) != 1 || rows[0].Status != "waiting" || rows[0].WaitingFor != "" {
+		t.Fatalf("unexpected waiting metadata broke discovery: %v, %v", rows, err)
+	}
+}
 func TestNativeFrameAndBusyPolicy(t *testing.T) {
 	a, exec, ipc, _, s := fixture(t, provider.Config{})
 	exec.rows[0].Status = "busy"
