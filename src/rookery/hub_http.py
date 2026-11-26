@@ -1,6 +1,7 @@
 """CLI runner for the public RPC and private observability listeners."""
 import asyncio
 import contextlib
+import re
 import signal
 import shutil
 import logging
@@ -11,6 +12,8 @@ from urllib.parse import urlsplit
 from .conversations import create_conversations_app
 from .core import Error
 from .hub import Hub, create_app, read_hash_file
+
+HOST_NAME = re.compile(r'(?=.{1,253}$)[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*')
 
 
 def listener(value):
@@ -50,7 +53,10 @@ def add_parser(sub):
     serve.add_argument('--tokens', required=True)
     serve.add_argument('--listen', default='127.0.0.1:8787')
     serve.add_argument('--metrics-listen', default='127.0.0.1:8788')
-    serve.add_argument('--conversations-listen', help='optional HOST:PORT on loopback for the operator dashboard')
+    serve.add_argument('--conversations-listen', help='optional HOST:PORT for the operator dashboard')
+    serve.add_argument('--conversations-host', action='append', default=[], metavar='NAME',
+                       help='host name the dashboard answers to behind a reverse proxy; repeatable, '
+                            'required when the dashboard listens beyond loopback')
     serve.add_argument('--conversations-password-hash-file', type=Path,
                        help='private JSON file mapping viewer to its password hash')
     serve.add_argument('--max-bytes', type=int, default=100_000_000)
@@ -67,12 +73,19 @@ async def serve(args):
         raise Error("hub serving requires the project's hub extra") from None
     public, internal = listener(args.listen), listener(args.metrics_listen)
     viewer = None
+    viewer_hosts = list(getattr(args, 'conversations_host', None) or [])
+    if viewer_hosts and not args.conversations_listen:
+        raise Error('conversations host requires the conversations listener')
     if args.conversations_listen or args.conversations_password_hash_file:
         if not args.conversations_listen or not args.conversations_password_hash_file:
             raise Error('conversations listener and password hash file must be supplied together')
         viewer = listener(args.conversations_listen)
-        if viewer[0] not in {'127.0.0.1', '::1'} or viewer[1] == 0 or viewer[1] in {public[1], internal[1]}:
-            raise Error('conversations requires a distinct port on 127.0.0.1 or ::1')
+        if viewer[1] == 0 or viewer[1] in {public[1], internal[1]}:
+            raise Error('conversations requires a distinct port')
+        if any(not HOST_NAME.fullmatch(name) for name in viewer_hosts):
+            raise Error('conversations host must be a plain DNS name without port')
+        if viewer[0] not in {'127.0.0.1', '::1'} and not viewer_hosts:
+            raise Error('conversations beyond loopback requires --conversations-host')
         try:
             hashes = read_hash_file(args.conversations_password_hash_file)
         except Error as exc:
@@ -106,7 +119,7 @@ async def serve(args):
                                     server_header=False, proxy_headers=False))
                for (host, port), private in ((public, False), (internal, True))]
     if viewer:
-        servers.append(Server(uvicorn.Config(create_conversations_app(hub, args.conversations_password_hash_file),
+        servers.append(Server(uvicorn.Config(create_conversations_app(hub, args.conversations_password_hash_file, viewer_hosts),
                                               host=viewer[0], port=viewer[1], workers=1, access_log=False,
                                               timeout_graceful_shutdown=15, server_header=False,
                                               proxy_headers=False, lifespan='off', ws='none')))

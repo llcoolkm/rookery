@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.4
+
+- The dashboard can be served under a host name behind a reverse proxy.
+  `--conversations-listen` accepts any address, and `--conversations-host NAME`
+  (repeatable) names the hosts it answers to besides loopback. A listener
+  beyond loopback requires at least one host name. Serve it over HTTPS and
+  restrict the route; see `docs/operations.md`.
+
 ## 0.3.3
 
 A read-only dashboard on the hub: conversations and the state of every session

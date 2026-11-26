@@ -124,7 +124,15 @@ def _authorized(headers, password_hashes):
     return username == "viewer" and authenticate_hash_file(password_hashes, "Bearer " + password) == "viewer"
 
 
-def create_conversations_app(hub, password_hashes):
+def _host_allowed(value, hosts):
+    if LOCAL_HOST.fullmatch(value):
+        return True
+    name, _, port = value.lower().partition(b":")
+    return name in hosts and (not port or (port.isdigit() and len(port) <= 5))
+
+
+def create_conversations_app(hub, password_hashes, hosts=()):
+    hosts = frozenset(host.lower().encode("ascii") for host in hosts)
     assets_dir = Path(__file__).with_name("conversations_ui")
     assets = {path: ((assets_dir / name).read_bytes(), mime) for path, (name, mime) in ASSETS.items()}
     password_hashes = Path(password_hashes)
@@ -151,9 +159,9 @@ def create_conversations_app(hub, password_hashes):
             await send({"type": "http.response.body", "body": body})
 
         headers = scope.get("headers", [])
-        hosts = [value for key, value in headers if key == b"host"]
-        if len(hosts) != 1 or not LOCAL_HOST.fullmatch(hosts[0]):
-            await respond(400, {"error": "invalid local host"})
+        requested = [value for key, value in headers if key == b"host"]
+        if len(requested) != 1 or not _host_allowed(requested[0], hosts):
+            await respond(400, {"error": "host not allowed"})
             return
         sites = [value for key, value in headers if key == b"sec-fetch-site"]
         if sites and sites not in ([b"same-origin"], [b"none"]):

@@ -151,6 +151,48 @@ class HttpTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('rookery_hub_api_requests_total{method="POST",code="200"} 1', self.hub.metrics())
         self.assertGreater(sum(self.hub.request_counts.values()), 1)
 
+    async def test_conversations_answer_only_to_loopback_and_configured_hosts(self):
+        hashes = self.root / 'viewer.json'
+        hashes.write_text(json.dumps({'viewer': hashlib.sha256(self.token.encode()).hexdigest()}))
+        hashes.chmod(0o600)
+        auth = (b'authorization', b'Basic ' + base64.b64encode(f'viewer:{self.token}'.encode()))
+
+        async def code(app, host):
+            return (await self.request(app=app, auth=False, path='/sessions', method='GET',
+                                       extra_headers=((b'host', host), auth)))[0]
+
+        local = create_conversations_app(self.hub, hashes)
+        proxied = create_conversations_app(self.hub, hashes, ['Dash.Example.org'])
+        for host in (b'127.0.0.1:8789', b'localhost', b'[::1]:8789'):
+            self.assertEqual(await code(local, host), 200)
+            self.assertEqual(await code(proxied, host), 200)
+        for host in (b'dash.example.org', b'DASH.example.org:443'):
+            self.assertEqual(await code(local, host), 400)
+            self.assertEqual(await code(proxied, host), 200)
+        for host in (b'evil.example.org', b'dash.example.org.evil.test', b'dash.example.org:x', b'xdash.example.org'):
+            self.assertEqual(await code(proxied, host), 400)
+
+    async def test_startup_requires_a_host_name_for_a_dashboard_beyond_loopback(self):
+        digest = hashlib.sha256(self.token.encode()).hexdigest()
+        hashes = self.root / 'viewer.json'
+        hashes.write_text(json.dumps({'viewer': digest}))
+        hashes.chmod(0o600)
+        db = self.root / 'new.sqlite3'
+        base = dict(listen='127.0.0.1:8787', metrics_listen='127.0.0.1:8788',
+                    conversations_password_hash_file=hashes, db=db, tokens=self.tokens)
+        for listen, hosts, error in [('0.0.0.0:8789', [], 'requires --conversations-host'),
+                                     ('0.0.0.0:8789', ['dash.example.org:443'], 'plain DNS name'),
+                                     ('127.0.0.1:8789', ['bad host'], 'plain DNS name'),
+                                     ('127.0.0.1:8787', [], 'distinct port'),
+                                     (None, ['dash.example.org'], 'requires the conversations listener')]:
+            with self.subTest(listen=listen, hosts=hosts):
+                args = SimpleNamespace(conversations_listen=listen, conversations_host=hosts, **base)
+                if listen is None:
+                    args.conversations_password_hash_file = None
+                with self.assertRaisesRegex(Error, error):
+                    await serve(args)
+                self.assertFalse(db.exists())
+
     async def test_sessions_requires_viewer_and_includes_unenrolled_remote_and_offline_rows(self):
         hashes = self.root / 'viewer.json'
         hashes.write_text(json.dumps({'viewer': hashlib.sha256(self.token.encode()).hexdigest()}))

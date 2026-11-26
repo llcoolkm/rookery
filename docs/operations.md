@@ -157,7 +157,7 @@ Install the wheel with uv, selecting the interpreter explicitly.
 earlier in PATH may be older:
 
 ```sh
-uv tool install --python /usr/bin/python3 ./rookery_agents-0.3.3-py3-none-any.whl
+uv tool install --python /usr/bin/python3 ./rookery_agents-0.3.4-py3-none-any.whl
 ```
 
 For a dedicated environment instead of `uv tool`:
@@ -165,7 +165,7 @@ For a dedicated environment instead of `uv tool`:
 ```sh
 uv venv --python /usr/bin/python3 "$HOME/.local/share/rookery/venv"
 uv pip install --python "$HOME/.local/share/rookery/venv/bin/python" \
-  ./rookery_agents-0.3.3-py3-none-any.whl
+  ./rookery_agents-0.3.4-py3-none-any.whl
 export PATH="$HOME/.local/share/rookery/venv/bin:$PATH"
 ```
 
@@ -616,9 +616,9 @@ sudo systemctl enable --now rookery-hub.service
 
 The repository's Dockerfile builds a hub image that runs as UID 10001 with a
 volume at `/data`; release builds publish it as `ghcr.io/llcoolkm/rookery`.
-Tags are the release versions with a `v` prefix, such as `v0.3.3`; there is no
+Tags are the release versions with a `v` prefix, such as `v0.3.4`; there is no
 `latest` tag. Pin a version, and preferably the digest
-(`ghcr.io/llcoolkm/rookery:v0.3.3@sha256:...`), so an update is a deliberate
+(`ghcr.io/llcoolkm/rookery:v0.3.4@sha256:...`), so an update is a deliberate
 change. Inside the container the listeners must bind all interfaces; publish
 them on the host's loopback only:
 
@@ -629,7 +629,7 @@ docker run -d --name rookery-hub --restart unless-stopped \
   -v rookery-hub-data:/data \
   -v /etc/rookery-hub/tokens.json:/run/rookery/tokens.json:ro \
   -p 127.0.0.1:8787:8787 -p 127.0.0.1:8788:8788 \
-  ghcr.io/llcoolkm/rookery:v0.3.3 \
+  ghcr.io/llcoolkm/rookery:v0.3.4 \
   hub serve --db /data/state/hub.sqlite3 --tokens /run/rookery/tokens.json \
   --listen 0.0.0.0:8787 --metrics-listen 0.0.0.0:8788
 ```
@@ -907,8 +907,8 @@ patches:
 Run `kubectl kustomize deploy/kubernetes` to inspect the rendered Deployment
 before applying it.
 
-Use an SSH local forward or a Kubernetes pod port-forward to reach the
-loopback listener from your browser. Bind the local end to loopback. Never
+With a loopback listener, use an SSH local forward or a Kubernetes pod
+port-forward to reach it from your browser. Bind the local end to loopback. Never
 use `--address 0.0.0.0` with port-forward. For the standard Deployment:
 
 ```sh
@@ -918,9 +918,24 @@ kubectl -n rookery port-forward --address 127.0.0.1 deployment/rookery-hub 8789:
 Type `http://127.0.0.1:8789/` in the browser address bar or open it from a
 bookmark. The dashboard rejects browser requests initiated by another site.
 Sign in as `viewer` using only the generated token printed above as the
-password. The hash file belongs to the hub. Keep this listener off ingress
-and Services. It serves message contents to the viewer credential,
-independently of node credentials and monitoring access.
+password. The hash file belongs to the hub. The dashboard serves message
+contents to the viewer credential, independently of node credentials and
+monitoring access.
+
+To serve the dashboard under a host name instead, behind a reverse proxy or
+an ingress that terminates TLS, bind the listener to an address the proxy can
+reach and name the host it answers to:
+
+```sh
+--conversations-listen 0.0.0.0:8789 --conversations-host dashboard.example.org
+```
+
+`--conversations-host` is repeatable and is required when the listener is not
+on loopback. The dashboard answers only to those names and to loopback names;
+any other `Host` gets 400. The password travels in every request, so the proxy
+must serve HTTPS only. Thirty days of message bodies sit behind that one
+password: restrict the route to private or VPN addresses unless you have a
+reason not to, and rate-limit it.
 
 The **Sessions** tab refreshes every five seconds and shows live sessions on
 every node, including published sessions awaiting enrollment. Use **Show offline**
