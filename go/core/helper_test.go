@@ -32,6 +32,47 @@ func helperMessage() core.Message {
 func helperSession() core.Session {
 	return core.Session{ID: sessionID, Provider: "claude", PID: 42, Status: "idle", ProcessRef: &platform.ProcessRef{PID: 42, Principal: "example", Start: "1", BootID: "example"}}
 }
+
+func TestHelperDoctorReportsRejectedOptionalSessionFields(t *testing.T) {
+	ctx := t.Context()
+	providerErrors := map[string]string{"codex": "provider discovery unavailable"}
+	result := json.RawMessage(`{"published":1,"invalid_metadata":4}`)
+	helper := &core.Helper{Node: "alpha", Store: newStore(t)}
+	helper.Native.Discover = func(context.Context) ([]core.Session, map[string]string) {
+		return []core.Session{helperSession()}, providerErrors
+	}
+	helper.Hub = helperHub{call: func(_ context.Context, req core.RPCRequest) (json.RawMessage, error) {
+		if req.Op != "publish" {
+			t.Fatalf("unexpected hub operation %q", req.Op)
+		}
+		return result, nil
+	}}
+	client := &core.Client{Store: helper.Store}
+	assertDoctor := func(wantWarning any) {
+		t.Helper()
+		if err := helper.Publish(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if err := helper.Health(ctx, true, nil); err != nil {
+			t.Fatal(err)
+		}
+		health, err := client.Invoke(ctx, "doctor", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		errs := health.(map[string]any)["provider_errors"].(map[string]any)
+		if errs["hub_metadata"] != wantWarning || errs["codex"] != providerErrors["codex"] {
+			t.Fatalf("unexpected doctor diagnostics: %#v", errs)
+		}
+		if _, ok := providerErrors["hub_metadata"]; ok {
+			t.Fatal("warning changed provider discovery state")
+		}
+	}
+	assertDoctor("4 optional session fields rejected by hub")
+	result = json.RawMessage(`{"published":1}`)
+	assertDoctor(nil)
+}
+
 func applyMessage(t *testing.T, s *core.LocalStore, m core.Message) {
 	t.Helper()
 	b, _ := json.Marshal(m)

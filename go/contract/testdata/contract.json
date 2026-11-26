@@ -28,7 +28,8 @@
               "id": "00000000-0000-4000-8000-000000000001",
               "name": "alpha",
               "status": "idle",
-              "pid": 101
+              "pid": 101,
+              "cwd": "/fixture/alpha"
             }
           ]
         }
@@ -74,7 +75,8 @@
               "id": "00000000-0000-4000-8000-000000000002",
               "name": "beta",
               "status": "idle",
-              "pid": 202
+              "pid": 202,
+              "cwd": "/fixture/beta"
             }
           ]
         }
@@ -122,6 +124,7 @@
           "sessions": [
             {
               "alias": "alpha",
+              "cwd": "/fixture/alpha",
               "enrolled": true,
               "enrollment_current": true,
               "id": "00000000-0000-4000-8000-000000000001",
@@ -136,6 +139,52 @@
             },
             {
               "alias": "beta",
+              "enrolled": true,
+              "enrollment_current": true,
+              "id": "00000000-0000-4000-8000-000000000002",
+              "key": "beta/codex:00000000-0000-4000-8000-000000000002",
+              "name": "beta",
+              "node": "beta",
+              "online": true,
+              "pid": 202,
+              "provider": "codex",
+              "status": "idle",
+              "status_since": 1800000000.0
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "directory_beta",
+      "node": "beta",
+      "path": "/v2/rpc",
+      "request": {
+        "op": "list",
+        "data": {}
+      },
+      "status": 200,
+      "response": {
+        "ok": true,
+        "result": {
+          "sessions": [
+            {
+              "alias": "alpha",
+              "enrolled": true,
+              "enrollment_current": true,
+              "id": "00000000-0000-4000-8000-000000000001",
+              "key": "alpha/claude:00000000-0000-4000-8000-000000000001",
+              "name": "alpha",
+              "node": "alpha",
+              "online": true,
+              "pid": 101,
+              "provider": "claude",
+              "status": "idle",
+              "status_since": 1800000000.0
+            },
+            {
+              "alias": "beta",
+              "cwd": "/fixture/beta",
               "enrolled": true,
               "enrollment_current": true,
               "id": "00000000-0000-4000-8000-000000000002",
@@ -309,6 +358,7 @@
               "v": 1
             },
             "session": {
+              "cwd": "/fixture/beta",
               "id": "00000000-0000-4000-8000-000000000002",
               "key": "beta/codex:00000000-0000-4000-8000-000000000002",
               "name": "beta",
@@ -622,6 +672,7 @@
           "sessions": [
             {
               "alias": "alpha",
+              "cwd": "/fixture/alpha",
               "enrolled": true,
               "enrollment_current": true,
               "id": "00000000-0000-4000-8000-000000000001",
@@ -1148,6 +1199,7 @@
               "v": 1
             },
             "session": {
+              "cwd": "/fixture/beta",
               "id": "00000000-0000-4000-8000-000000000002",
               "key": "beta/codex:00000000-0000-4000-8000-000000000002",
               "name": "beta",

@@ -810,6 +810,7 @@ Prometheus text format:
 | `rookery_hub_storage_bytes{file="database"\|"wal"}` | the two files separately |
 | `rookery_hub_snapshot_last_success_timestamp_seconds` | last snapshot |
 | `rookery_hub_node_last_seen_timestamp_seconds{node=...}` | last contact per node |
+| `rookery_hub_invalid_session_metadata_total` | optional session fields the hub dropped in successful publishes |
 | `rookery_hub_requests_total`, `rookery_hub_api_requests_total` | requests by method and code (API excludes health, metrics and graph) |
 | `rookery_hub_request_duration_seconds` | request duration histogram |
 

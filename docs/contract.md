@@ -130,11 +130,12 @@ fields from older helpers are valid, and unknown fields are ignored.
 | Field | Wire rule |
 | --- | --- |
 | `waiting_for` | Provider-reported reason for a waiting status, up to 128 UTF-8 bytes. |
-| `status_since` | Hub-generated Unix seconds when it first observed the current status for this session and PID. A change to status or PID starts a new observation. The hub ignores legacy helper-provided timestamps and counts invalid values, including timestamps more than five minutes ahead. |
+| `status_since` | Hub-generated Unix seconds when it first observed the current status for this session and PID. A change to status or PID starts a new observation, as does a PID-less session reappearing after it was omitted. The hub ignores legacy helper-provided timestamps and counts invalid values, including timestamps more than five minutes ahead. |
 | `tmux` | `session:window`, with a nonempty session name without colons and a decimal window index, up to 128 UTF-8 bytes. Emitted when the helper can match an owned session process or its ancestor to a tmux pane. |
 | `cwd` | Provider-reported working directory, up to 512 UTF-8 bytes. |
 
-Text values must be nonblank and contain no C0, DEL, C1 or Unicode format characters.
+Optional text values must be nonblank and contain no C0, DEL, C1 or Unicode
+format characters. The hub strips Unicode format characters from session names.
 The authenticated operator listener serves `GET /sessions` as
 `{sessions:[{node,provider,id,name,status,online,waiting_for?,status_since?,tmux?,cwd?}]}`.
 It includes all published rows, with offline status `unknown`. Node RPC

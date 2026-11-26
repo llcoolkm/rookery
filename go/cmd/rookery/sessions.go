@@ -57,7 +57,7 @@ func readSessions(ctx context.Context, out io.Writer, interval time.Duration, re
 			}
 		}
 		if err != nil {
-			if _, err := fmt.Fprintf(out, "Could not read peer sessions: %v\n", err); err != nil {
+			if _, err := fmt.Fprintf(out, "Could not read peer sessions: %s\n", printableSessionText(err.Error())); err != nil {
 				return err
 			}
 		} else {
@@ -79,6 +79,15 @@ func readSessions(ctx context.Context, out io.Writer, interval time.Duration, re
 func sessionText(row map[string]any, key string) string {
 	value, _ := row[key].(string)
 	return value
+}
+
+func printableSessionText(value string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsPrint(r) {
+			return r
+		}
+		return '?'
+	}, value)
 }
 
 func writeSessions(out io.Writer, directory map[string]any, now float64) error {
@@ -131,12 +140,7 @@ func writeSessions(out io.Writer, directory map[string]any, now float64) error {
 			if value == "" {
 				fields[i] = "—"
 			} else {
-				fields[i] = strings.Map(func(r rune) rune {
-					if unicode.IsPrint(r) {
-						return r
-					}
-					return '?'
-				}, value)
+				fields[i] = printableSessionText(value)
 			}
 		}
 		fmt.Fprintln(w, strings.Join(fields, "\t"))

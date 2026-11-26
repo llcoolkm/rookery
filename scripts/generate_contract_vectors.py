@@ -86,9 +86,10 @@ def generate_vectors():
                 return copy.deepcopy(response.get("result"))
             call("unauthorized", "alpha", "list", authenticated=False)
             for node, provider, number, pid in (("alpha", "claude", 1, 101), ("beta", "codex", 2, 202)):
-                call("publish_" + node, node, "publish", {"sessions": [{"provider": provider, "id": identifier(number), "name": node, "status": "idle", "pid": pid}]})
+                call("publish_" + node, node, "publish", {"sessions": [{"provider": provider, "id": identifier(number), "name": node, "status": "idle", "pid": pid, "cwd": f"/fixture/{node}"}]})
                 call("enroll_" + node, node, "enroll", {"target": f"{node}/{provider}:" + identifier(number), "alias": node})
             call("directory", "alpha", "list")
+            call("directory_beta", "beta", "list")
             send_data = {"actor": alpha, "to": "beta", "body": 'Review “alpha”.\nSecond line\u0085\u2028\u2029', "id": identifier(10), "ttl": 3600, "expires": NOW + 3600, "_request_id": request_id()}
             ask = call("send_ask", "alpha", "send", send_data)
             call("retry_same_request", "alpha", "send", send_data)

@@ -9,7 +9,7 @@ from urllib.parse import parse_qs
 
 from .common import canonical_id
 from .core import Error
-from .hub import MESSAGE_BODY_RETENTION, TERMINAL, Unavailable, authenticate_hash_file, encoded
+from .hub import MESSAGE_BODY_RETENTION, TERMINAL, Unavailable, authenticate_hash_file, display_session_name, encoded
 
 PAGE_SIZE = 40
 STATES = TERMINAL | {"pending", "read", "dispatching"}
@@ -24,7 +24,7 @@ ASSETS = {
 
 def _participant(key, name):
     host, identity = key.split("/", 1)
-    return {"id": key, "name": name or identity, "host": host}
+    return {"id": key, "name": display_session_name(name, identity), "host": host}
 
 
 def _thread_page(hub, query):

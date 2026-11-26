@@ -77,6 +77,10 @@ class HubTests(unittest.TestCase):
                                  {key: val for key, val in metadata.items() if key != field})
         self.hub.call('server', 'publish', {'sessions': [{**self.a, 'unrecognized': 'ignored'}]})
         self.assertFalse(set(published()) & (metadata.keys() | {'unrecognized'}))
+        self.assertIn(f'rookery_hub_invalid_session_metadata_total {len(invalid)}\n', self.hub.metrics())
+        with self.assertRaises(Error):
+            self.hub.call('server', 'publish', {'sessions': [{**session, 'cwd': False}, {**session, 'status': 'broken'}]})
+        self.assertIn(f'rookery_hub_invalid_session_metadata_total {len(invalid)}\n', self.hub.metrics())
 
     def test_status_transition_time_survives_heartbeat_and_changes_with_status_or_pid(self):
         now = time.time()
@@ -88,6 +92,21 @@ class HubTests(unittest.TestCase):
                 self.hub.call('server', 'publish', {'sessions': [spec]})
                 row = next(row for row in self.hub.fleet_sessions() if row['id'] == self.a['id'])
                 self.assertEqual(row['status_since'], now + since)
+
+    def test_reappearing_pidless_session_starts_a_new_observation(self):
+        now = time.time()
+        with_pid = {**self.a, 'name': 'work\u202equeue', 'status': 'busy'}
+        pidless = {**self.a, 'id': uid(), 'name': '\u202e'}
+        pidless.pop('pid')
+        with patch('rookery.hub.time.time', return_value=now):
+            self.hub.call('server', 'publish', {'sessions': [with_pid, pidless]})
+            self.hub.call('server', 'publish', {'sessions': []})
+        later = now + 3 * 86400
+        with patch('rookery.hub.time.time', return_value=later):
+            self.hub.call('server', 'publish', {'sessions': [with_pid, pidless]})
+            rows = {row['id']: row for row in self.hub.call('server', 'list')['sessions']}
+        self.assertEqual((rows[with_pid['id']]['status_since'], rows[with_pid['id']]['name']), (now, 'workqueue'))
+        self.assertEqual((rows[pidless['id']]['status_since'], rows[pidless['id']]['name']), (later, pidless['id']))
 
     def test_answering_a_reply_sends_one_threaded_follow_up_ask(self):
         ask = self.send()

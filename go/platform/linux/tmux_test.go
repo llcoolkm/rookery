@@ -15,9 +15,9 @@ import (
 func TestTmuxSnapshotSkipsInvalidLinesIndividually(t *testing.T) {
 	p := &processes{}
 	got := p.snapshotTmuxPanes(t.Context(), time.Now, func(context.Context) (platform.ExecResult, error) {
-		return platform.ExecResult{State: platform.Completed, Stdout: []byte("bad\n2 no-index\n1 main:2\n2 workspace:4\n3 junk\x00:1\n4 bad\xffname:3\n5 after:0\n")}, nil
+		return platform.ExecResult{State: platform.Completed, Stdout: []byte("bad\n2 no-index\n1 main:2\n2 workspace:4\n3 junk\x00:1\n4 bad\xffname:3\n5 bad\xffname:2\n5 after:0\n")}, nil
 	})
-	want := map[int]string{1: "main:2", 2: "workspace:4", 4: "bad\uFFFDname:3", 5: "after:0"}
+	want := map[int]string{1: "main:2", 2: "workspace:4", 5: "after:0"}
 	if !maps.Equal(got, want) {
 		t.Fatalf("tmux panes = %v, want %v", got, want)
 	}

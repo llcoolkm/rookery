@@ -225,15 +225,16 @@ class HttpTests(unittest.IsolatedAsyncioTestCase):
         args = SimpleNamespace(listen='127.0.0.1:8787', metrics_listen='127.0.0.1:8788',
                                conversations_listen='127.0.0.1:8789', conversations_password_hash_file=hashes,
                                db=db, tokens=self.tokens)
-        for value, mode in [(None, 0o600), ('{bad', 0o600), (json.dumps({'server': digest}), 0o600),
-                            (json.dumps({'viewer': digest, 'server': digest}), 0o600),
-                            (json.dumps({'viewer': 'malformed'}), 0o600),
-                            (json.dumps({'viewer': digest}), 0o666)]:
+        for value, mode, error in [(None, 0o600, 'is missing'), ('{bad', 0o600, 'not valid JSON'),
+                                   (json.dumps({'server': digest}), 0o600, 'no viewer entry'),
+                                   (json.dumps({'viewer': digest, 'server': digest}), 0o600, 'duplicate viewer hash'),
+                                   (json.dumps({'viewer': 'malformed'}), 0o600, 'must map valid names to SHA-256 hashes'),
+                                   (json.dumps({'viewer': digest}), 0o666, 'safe mode and owner')]:
             with self.subTest(value=value, mode=mode):
                 if value is not None:
                     hashes.write_text(value)
                     hashes.chmod(mode)
-                with self.assertRaisesRegex(Error, 'password hash file must be private JSON'):
+                with self.assertRaisesRegex(Error, f'conversations password hash file .*{error}'):
                     await serve(args)
                 self.assertFalse(db.exists())
 

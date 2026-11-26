@@ -205,6 +205,34 @@ class HelperTests(unittest.TestCase):
         self.assertEqual(row['waiting_for'], 'approval')
         self.assertNotIn('cwd', row)
 
+    def test_rejected_publish_metadata_reports_only_count_until_next_success(self):
+        from rookery import cli
+
+        private = '/private/session/path'
+        self.hub.call = Mock(side_effect=[{'published': 1, 'invalid_metadata': 2, 'detail': private},
+                                         Error('hub unavailable'), {'published': 1}])
+        self.helper.discover = lambda: ([{**self.session, 'cwd': private}], {'claude': 'discovery unavailable'})
+        commands = [cli.parser().parse_args([name]) for name in ('health', 'doctor')]
+        warning = '2 optional session fields rejected by hub'
+
+        def assert_health(expected):
+            for command in commands:
+                status = cli.unified_run(command, self.path)
+                self.assertEqual(status['provider_errors'].get('hub_metadata'), expected)
+                self.assertEqual(status['provider_errors']['claude'], 'discovery unavailable')
+                self.assertNotIn(private, json.dumps(status))
+
+        self.helper.publish()
+        self.helper.health()
+        assert_health(warning)
+        with self.assertRaisesRegex(Error, 'hub unavailable'):
+            self.helper.publish()
+        self.helper.health('hub unavailable')
+        assert_health(warning)
+        self.helper.publish()
+        self.helper.health()
+        assert_health(None)
+
     def test_explicit_polling_registration_overrides_native_discovery(self):
         polling = {'provider': 'codex', 'id': self.session['id'], 'name': 'Codex polling',
                    'pid': 999, 'status': 'waiting', 'delivery': 'polling'}

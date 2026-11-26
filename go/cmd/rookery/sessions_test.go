@@ -52,7 +52,7 @@ func TestSessionsTableDistinguishesDirectoryStates(t *testing.T) {
 func TestSessionsWatchRecoversFromReadFailure(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
-	broken := errors.New("cache unavailable")
+	broken := errors.New("cache unavailable\x1b\u202e\n")
 	calls := 0
 	peers := func(context.Context) (map[string]any, error) {
 		calls++
@@ -74,7 +74,7 @@ func TestSessionsWatchRecoversFromReadFailure(t *testing.T) {
 	if err := readSessions(ctx, &output, time.Millisecond, false, peers); err != nil {
 		t.Fatal(err)
 	}
-	if calls != 3 || !strings.Contains(output.String(), "Could not read peer sessions: cache unavailable") || !strings.Contains(output.String(), "No live peer sessions.") {
+	if calls != 3 || !strings.Contains(output.String(), "Could not read peer sessions: cache unavailable???\n") || !strings.Contains(output.String(), "No live peer sessions.") {
 		t.Fatalf("watch did not recover on next read: %d reads, %q", calls, output.String())
 	}
 }

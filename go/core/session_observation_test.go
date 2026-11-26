@@ -39,7 +39,7 @@ func TestPublishSessionMetadataMapsTmuxAncestors(t *testing.T) {
 	h := Helper{Process: process, Hub: hub}
 	h.Native.Discover = func(context.Context) ([]Session, map[string]string) {
 		return []Session{
-			{Provider: "claude", ID: "grandchild", Status: "waiting", StatusSince: 100, WaitingFor: "permission", Cwd: "/workspace", PID: 11, ProcessRef: &platform.ProcessRef{PID: 11}},
+			{Provider: "claude", ID: "grandchild", Status: "waiting", WaitingFor: "permission", Cwd: "/workspace", PID: 11, ProcessRef: &platform.ProcessRef{PID: 11}},
 			{Provider: "claude", ID: "direct", Status: "idle", WaitingFor: "out of date", Cwd: "     ", PID: 12, ProcessRef: &platform.ProcessRef{PID: 12}},
 			{Provider: "claude", ID: "outside", Status: "waiting", WaitingFor: "invalid\x1b", Cwd: strings.Repeat("å", 257), PID: 19, ProcessRef: &platform.ProcessRef{PID: 19}},
 			{Provider: "codex", ID: "shared-daemon", Status: "waiting", WaitingFor: "approval", PID: 12, ProcessRef: &platform.ProcessRef{PID: 12}},

@@ -19,6 +19,7 @@ import sqlite3
 import stat
 import time
 import tempfile
+from threading import Lock
 import unicodedata
 import uuid
 from urllib.parse import parse_qs
@@ -85,41 +86,51 @@ def read_hash_file(path):
     """
     try:
         info = path.stat()
-        if not stat.S_ISREG(info.st_mode) or info.st_uid not in {0, os.getuid()} or info.st_mode & 0o022:
-            return None
-        if info.st_uid != 0 and info.st_mode & 0o077:
-            return None
-        if info.st_size > 65536:
-            return None
+    except FileNotFoundError:
+        raise Error("hash file is missing") from None
+    except OSError:
+        raise Error("cannot inspect hash file") from None
+    if (not stat.S_ISREG(info.st_mode) or info.st_uid not in {0, os.getuid()} or info.st_mode & 0o022
+            or (info.st_uid != 0 and info.st_mode & 0o077)):
+        raise Error("hash file must be regular with a safe mode and owner")
+    if info.st_size > 65536:
+        raise Error("hash file exceeds 64 KiB")
+    try:
         records = json.loads(path.read_text())
-        if not isinstance(records, dict):
-            return None
-        for owner, expected in records.items():
-            if (not isinstance(owner, str) or not NODE.fullmatch(owner) or not isinstance(expected, str)
-                    or not re.fullmatch(r"[a-f0-9]{64}", expected)):
-                return None
-        return records
-    except (OSError, ValueError, UnicodeError, RecursionError):
-        return None
+    except FileNotFoundError:
+        raise Error("hash file is missing") from None
+    except OSError:
+        raise Error("cannot read hash file") from None
+    except (ValueError, RecursionError):
+        raise Error("hash file is not valid JSON") from None
+    if not isinstance(records, dict) or any(
+        not NODE.fullmatch(owner) or not isinstance(expected, str) or not re.fullmatch(r"[a-f0-9]{64}", expected)
+        for owner, expected in records.items()
+    ):
+        raise Error("hash file must map valid names to SHA-256 hashes")
+    return records
 
 
 def authenticate_hash_file(path, authorization):
     token = authorization.removeprefix("Bearer ")
     if token == authorization or not 32 <= len(token) <= 4096:
         return None
-    records = read_hash_file(path)
-    if records is None:
-        return None
     try:
+        records = read_hash_file(path)
         digest = hashlib.sha256(token.encode()).hexdigest()
-    except UnicodeError:
+    except (Error, UnicodeError):
         return None
     matched = [owner for owner, expected in records.items() if hmac.compare_digest(digest, expected)]
     return matched[0] if len(matched) == 1 else None
 
 
+def display_session_name(name, fallback):
+    return "".join(char for char in (name or "") if unicodedata.category(char) != "Cf") or fallback
+
+
 def _session_presence(row, now):
     data = json.loads(row["data"])
+    data["name"] = display_session_name(data.get("name"), data["id"])
     data["online"] = bool(row["live"] and 0 <= now - row["updated"] <= FRESH)
     if not data["online"]:
         data["status"] = "unknown"
@@ -153,6 +164,8 @@ class Hub:
         self.snapshot_last_success = 0.0
         self.request_counts, self.durations = {}, []
         self.api_request_counts = {}
+        self.invalid_metadata_count = 0
+        self._invalid_metadata_lock = Lock()
         self.duration_sum, self.duration_count = 0.0, 0
         self.buckets = {value: 0 for value in (.005, .01, .025, .05, .1, .25, .5, 1, 2.5, 5, 10, 30)}
         self._lock = None
@@ -502,7 +515,10 @@ class Hub:
                     # Check every write, including events and request caches.
                     # Completion of existing delivery may use the reserve.
                     self._capacity(db, 8192, reserve=op in ADMISSIONS)
-                return result
+            if op == "publish" and result.get("invalid_metadata"):
+                with self._invalid_metadata_lock:
+                    self.invalid_metadata_count += result["invalid_metadata"]
+            return result
         except (KeyError, TypeError, ValueError, AttributeError, OverflowError):
             raise Error("invalid request fields") from None
 
@@ -520,7 +536,10 @@ class Hub:
                     raise Error("duplicate or invalid published session")
                 seen.add(key)
                 name = item.get("name") or item["id"]
-                if not isinstance(name, str) or len(name) > 256:
+                if not isinstance(name, str):
+                    raise Error("invalid session name")
+                name = display_session_name(name, item["id"])
+                if len(name) > 256:
                     raise Error("invalid session name")
                 value = {"key": key, "node": node, "provider": item["provider"], "id": item["id"],
                          "name": name, "status": item["status"]}
@@ -585,7 +604,7 @@ class Hub:
                 prior = json.loads(previous_raw) if previous_raw is not None else {}
                 stamp = prior.get("status_since")
                 if (not number(stamp) or not 0 <= stamp <= now or prior.get("status") != value["status"]
-                        or prior.get("pid") != value.get("pid")):
+                        or prior.get("pid") != value.get("pid") or (not previous_live and "pid" not in value)):
                     stamp = now
                 value["status_since"] = stamp
                 raw = encoded(value)
@@ -866,6 +885,8 @@ class Hub:
         lines += [f'rookery_hub_oldest_dispatching_age_seconds {values["oldest_dispatching_age_seconds"]}',
                   f'rookery_hub_db_bytes {values["database_bytes"]}',
                   f'rookery_hub_snapshot_last_success_timestamp_seconds {self.snapshot_last_success}']
+        lines += ['# TYPE rookery_hub_invalid_session_metadata_total counter',
+                  f'rookery_hub_invalid_session_metadata_total {self.invalid_metadata_count}']
         lines += [f'rookery_hub_storage_bytes{{file="{name}"}} {size}'
                   for name, size in values['storage_bytes'].items()]
         lines += [f'rookery_hub_node_last_seen_timestamp_seconds{{node="{node}"}} {stamp}' for node, stamp in sorted(values["nodes"].items())]

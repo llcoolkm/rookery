@@ -141,6 +141,7 @@ class Helper:
         self.sessions = []
         self.session_details = session_details.SessionDetails()
         self.errors = {}
+        self.invalid_metadata = 0
         self.next_discovery = 0
         self.next_prune = 0
         self.directory_dirty = True
@@ -254,6 +255,8 @@ class Helper:
         published = self.client.call('publish', payload)
         if published.get('refused'):
             self.errors['hub'] = 'hub session quota reached; new sessions were not advertised'
+        invalid = published.get('invalid_metadata')
+        self.invalid_metadata = invalid if type(invalid) is int and invalid > 0 else 0
         self.next_discovery = time.monotonic()+15
         self.directory_dirty = True
         self.auto_enroll()
@@ -388,9 +391,12 @@ class Helper:
             self.next_prune = time.monotonic()+3600
 
     def health(self, error=None, running=True):
+        provider_errors = dict(self.errors)
+        if self.invalid_metadata:
+            provider_errors['hub_metadata'] = f'{self.invalid_metadata} optional session fields rejected by hub'
         atomic(self.store.path/'health.json',{'updated':time.time(),'pid':os.getpid(),'running':running,
             'connected':running and not error and not self.sync_error and time.time()-self.last_sync<40,
-            'node':self.config['node'],'error':error or self.sync_error,'provider_errors':self.errors,
+            'node':self.config['node'],'error':error or self.sync_error,'provider_errors':provider_errors,
             'busy_delivery':providers.busy_optin()})
 
     def run(self, once=False):

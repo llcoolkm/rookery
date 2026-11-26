@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"maps"
 	"strings"
 	"sync"
 	"time"
@@ -174,7 +175,7 @@ func (h *Helper) Publish(ctx context.Context) error {
 	if h.Native.Discover != nil {
 		sessions, errs = h.Native.Discover(ctx)
 	}
-	h.Sessions, h.ProviderErrors = sessions, errs
+	h.Sessions, h.ProviderErrors = sessions, maps.Clone(errs)
 	if len(sessions) > 128 {
 		return errors.New("provider discovery exceeds publish limit")
 	}
@@ -203,8 +204,21 @@ func (h *Helper) Publish(ctx context.Context) error {
 	if e != nil {
 		return e
 	}
-	if _, e = h.Hub.Call(ctx, request); e != nil {
+	result, e := h.Hub.Call(ctx, request)
+	if e != nil {
 		return e
+	}
+	var published struct {
+		InvalidMetadata int `json:"invalid_metadata"`
+	}
+	if e := json.Unmarshal(result, &published); e != nil {
+		return errors.New("invalid hub publish response")
+	}
+	if published.InvalidMetadata > 0 {
+		if h.ProviderErrors == nil {
+			h.ProviderErrors = map[string]string{}
+		}
+		h.ProviderErrors["hub_metadata"] = fmt.Sprintf("%d optional session fields rejected by hub", published.InvalidMetadata)
 	}
 	h.nextDiscovery = time.Now().Add(15 * time.Second)
 	h.dirtyDirectory()

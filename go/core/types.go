@@ -131,7 +131,6 @@ type Session struct {
 	Name              string                     `json:"name"`
 	Status            string                     `json:"status"`
 	WaitingFor        string                     `json:"waiting_for,omitempty"`
-	StatusSince       float64                    `json:"status_since,omitempty"`
 	Tmux              string                     `json:"tmux,omitempty"`
 	Cwd               string                     `json:"cwd,omitempty"`
 	PID               int                        `json:"pid,omitempty"`

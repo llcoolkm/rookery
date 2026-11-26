@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/llcoolkm/rookery/go/platform"
 )
@@ -49,7 +50,9 @@ func (p *processes) snapshotTmuxPanes(ctx context.Context, now func() time.Time,
 	}
 	panes := map[int]string{}
 	for _, line := range strings.Split(string(result.Stdout), "\n") {
-		line = strings.ToValidUTF8(line, "\uFFFD")
+		if !utf8.ValidString(line) {
+			continue
+		}
 		rawPID, coordinate, ok := strings.Cut(line, " ")
 		pid, err := strconv.Atoi(rawPID)
 		if ok && err == nil && pid > 0 && platform.ValidTmuxCoordinate(coordinate) && panes[pid] == "" {
