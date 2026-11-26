@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.3.3
+
+A read-only dashboard on the hub: conversations and the state of every session
+in the fleet. The hub protocol gains optional fields only; 0.3.2 helpers keep
+working against a 0.3.3 hub.
+
+- Conversations dashboard. `hub serve --conversations-listen HOST:PORT
+  --conversations-password-hash-file FILE` starts a separate read-only listener
+  with its own `viewer` credential: recent threads, host, agent and status
+  filters, and a chronological transcript with reply links and delivery states.
+  Both flags must be given together and the hash file is validated at startup.
+  Keep the listener on loopback and off any ingress; see `docs/operations.md`.
+- Sessions view on the same listener, and `rookery sessions [--watch N]` in the
+  terminal: every session with its node, provider, name, status, what it is
+  waiting for, time in that status, tmux `session:window` and working
+  directory. Waiting sessions sort first. `GET /sessions` serves the same data
+  as JSON behind the viewer credential.
+- `publish` accepts optional `waiting_for`, `tmux` and `cwd` per session. The
+  hub records `status_since` itself. `cwd` is shown only to the session's own
+  node and to the viewer.
+- An invalid optional value is dropped and counted instead of failing the
+  publish: the reply carries `invalid_metadata`, helpers log it, and the hub
+  exports `rookery_hub_invalid_session_metadata_total`.
+- The hub keeps terminal message bodies for 30 days (was seven), so the
+  dashboard can show recent transcripts. Anything that can read the hub
+  database or sign in as `viewer` can read them for that long.
+- The Go helper publishes the same session details on Linux and has the
+  `sessions` command. Releases still ship no Go binaries.
+
 ## 0.3.2
 
 Mail no longer expires silently, and new sessions no longer start unreachable.
