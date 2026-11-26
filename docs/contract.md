@@ -189,8 +189,12 @@ must not overwrite newer sync snapshots. (`src/rookery/daemon.py:229`,
 
 Maintenance expires pending/read messages whose deadline passed; submitted and
 uncertain outcomes are not retroactively expired/retried. Terminal message bodies
-are cleared after 30 days, setting body empty and body_retained false, while
-routing/ID binding remains. Events and request caches have seven-day retention;
+are cleared after 30 days, setting `body` empty and `body_retained` false, while
+routing/ID binding remains. The `status` RPC returns retained bodies only for
+messages whose sender or recipient is on the authenticated node, across that
+node's sessions. Retained bodies in the live database and WAL count toward
+`--max-bytes` admission. Existing snapshots can hold earlier copies and require
+separate disk space. Events and request caches have seven-day retention;
 enrollment and aliases are never pruned as stale. Local Python pruning removes
 old submitted/acknowledged/replied/expired/cancelled/failed messages after seven
 days, reported attempts after 30 days, results after seven days; uncertain local

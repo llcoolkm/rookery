@@ -716,12 +716,18 @@ and restrict that port with a host firewall to the scraper's address.
 "hub admission quota reached", retryable) when use reaches the budget less a
 reserve of 16 MiB or a fifth of the budget, whichever is smaller. A recipient
 node with `--pending-limit` open messages refuses more, with the same retryable
-429. Message bodies
-are cleared 30 days after a message reaches a final state, and the sync event
-log keeps seven days. Budget disk for the database, its WAL (usually small after
-checkpoints, but it can grow while a long read is open) and up to three snapshots, each about the
-database's size. A volume size is not necessarily a quota: monitor actual free
-space.
+429.
+
+The hub clears terminal message bodies after 30 days. While a body is retained,
+a node token can read it through the `status` RPC if the sender or recipient is
+on that node. That access covers all sessions on the authenticated node. The
+sync event log keeps seven days.
+
+Retained bodies take space in the database and WAL, both of which count toward
+`--max-bytes` admission. Existing hub snapshots may contain bodies retained at
+the time of backup. Budget disk separately for up to three snapshots, each about
+the database's size. Allow for WAL growth while a long read is open. Check
+whether your storage class enforces the volume size and monitor free space.
 
 The hub also bounds its own metadata. It remembers request IDs for idempotency
 only within a retry window (seven days), and caps the metadata each node can
@@ -831,7 +837,7 @@ the printed password in a password manager.
 
 ```sh
 umask 077
-python3 -c 'import hashlib,json,secrets; p=secrets.token_urlsafe(32); print(p); open("viewer.json","x").write(json.dumps({"viewer":hashlib.sha256(p.encode()).hexdigest()}))'
+python3 -c 'import hashlib,json,secrets; p=secrets.token_urlsafe(32); open("viewer.json","x").write(json.dumps({"viewer":hashlib.sha256(p.encode()).hexdigest()})); print(p)'
 ```
 
 Add both flags to the hub's existing `rookery hub serve` command:
@@ -840,17 +846,51 @@ Add both flags to the hub's existing `rookery hub serve` command:
 --conversations-listen 127.0.0.1:8789 --conversations-password-hash-file /path/to/viewer.json
 ```
 
-Use an SSH local forward or a Kubernetes pod port-forward to reach the
-loopback listener from your browser. For example, if the Deployment is named
-`rookery-hub` in the `rookery` namespace:
+On Kubernetes, create a separate Secret from the generated hash file:
 
 ```sh
-kubectl -n rookery port-forward deployment/rookery-hub 8789:8789
+kubectl -n rookery create secret generic rookery-hub-viewer \
+  --from-file=viewer.json=./viewer.json
 ```
 
-Open `http://127.0.0.1:8789/` and sign in as `viewer` with the generated password.
-Keep this listener off ingress and Services. It serves message contents to the
-viewer credential, independently of node credentials and monitoring access.
+Append the viewer flags, mount, and volume below to the existing
+`rookery-hub` Deployment. The standard manifest uses `fsGroup: 10001` for
+access to the read-only projected Secret. Keep `readOnlyRootFilesystem: true`.
+
+```yaml
+spec:
+  template:
+    spec:
+      containers:
+        - name: hub
+          args:
+            - --conversations-listen=127.0.0.1:8789
+            - --conversations-password-hash-file=/etc/rookery-viewer/viewer.json
+          securityContext:
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - name: viewer
+              mountPath: /etc/rookery-viewer
+              readOnly: true
+      volumes:
+        - name: viewer
+          secret:
+            secretName: rookery-hub-viewer
+            defaultMode: 0440
+```
+
+Use an SSH local forward or a Kubernetes pod port-forward to reach the
+loopback listener from your browser. Bind the local end to loopback. Never
+use `--address 0.0.0.0` with port-forward. For the standard Deployment:
+
+```sh
+kubectl -n rookery port-forward --address 127.0.0.1 deployment/rookery-hub 8789:8789
+```
+
+Open `http://127.0.0.1:8789/` and sign in as `viewer` using only the generated
+token printed above as the password. The hash file belongs to the hub. Keep
+this listener off ingress and Services. It serves message contents to the viewer
+credential, independently of node credentials and monitoring access.
 
 The **Sessions** tab refreshes every five seconds and shows live sessions on
 every node, including published sessions awaiting enrollment. Use **Show offline**
