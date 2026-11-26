@@ -78,6 +78,8 @@ jobs:
         with:
           version: '0.10.9'
           python-version: '3.12'
+          # This job fills no uv cache, and saving a missing one fails the job.
+          enable-cache: false
       - name: Enforce portable core and providers
         run: |
           # Inspect imports of every reachable project package. The standard
