@@ -27,6 +27,7 @@ from .common import NODE, address, canonical_id, owned
 from .request_ids import CLOCK_SKEW, REQUEST_WINDOW, request_created
 
 RETENTION = 7 * 86400
+MESSAGE_BODY_RETENTION = 30 * 86400
 GRAPH_MESSAGES = 10000
 GRAPH_NODES = 500
 GRAPH_EDGES = 2000
@@ -157,6 +158,7 @@ class Hub:
                     CREATE INDEX IF NOT EXISTS messages_status ON messages(status,updated);
                     CREATE INDEX IF NOT EXISTS messages_terminal ON messages(retained,terminal_at);
                     CREATE INDEX IF NOT EXISTS messages_created ON messages(json_extract(data, '$.created'));
+                    CREATE INDEX IF NOT EXISTS messages_conversation ON messages(json_extract(data, '$.conversation'),seq);
                     CREATE TABLE IF NOT EXISTS requests(
                         node TEXT NOT NULL,id TEXT NOT NULL,binding TEXT NOT NULL,result TEXT NOT NULL,
                         PRIMARY KEY(node,id));
@@ -287,7 +289,7 @@ class Hub:
                 detail += f"; last hold: {message['detail'][:512]}"
             message.update(status="expired", detail=detail, expired_while=state)
             self._save(db, message)
-        for row in db.execute("SELECT id,data FROM messages WHERE retained=1 AND terminal_at<? LIMIT 128", (now - RETENTION,)).fetchall():
+        for row in db.execute("SELECT id,data FROM messages WHERE retained=1 AND terminal_at<? LIMIT 128", (now - MESSAGE_BODY_RETENTION,)).fetchall():
             message = json.loads(row["data"])
             if message.get("body_retained", True):
                 message.update(body="", body_retained=False)

@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import hashlib
 import json
 import os
@@ -10,7 +11,8 @@ import unittest
 from unittest.mock import patch
 import uuid
 
-from rookery.hub import Hub, MAX_REQUEST, authenticate_hash_file, create_app
+from rookery.conversations import create_conversations_app
+from rookery.hub import Hub, MAX_REQUEST, MESSAGE_BODY_RETENTION, authenticate_hash_file, create_app
 from rookery.hub_http import listener, snapshot_once
 
 
@@ -28,11 +30,11 @@ class HttpTests(unittest.IsolatedAsyncioTestCase):
         self.app = create_app(self.hub, self.tokens)
         self.internal = create_app(self.hub, self.tokens, internal=True)
 
-    async def request(self, value=None, *, raw=None, token=None, auth=True, duplicate=False, path='/v2/rpc', method='POST', app=None, query=b''):
+    async def request(self, value=None, *, raw=None, token=None, auth=True, duplicate=False, path='/v2/rpc', method='POST', app=None, query=b'', extra_headers=()):
         headers = [(b'authorization', ('Bearer ' + (token or self.token)).encode())] if auth else []
         if duplicate:
             headers += headers
-        scope = dict(type='http', method=method, path=path, headers=headers, query_string=query)
+        scope = dict(type='http', method=method, path=path, headers=headers + list(extra_headers), query_string=query)
         body = raw if raw is not None else json.dumps(value or {}).encode()
         received, output = False, []
         async def receive():
@@ -77,6 +79,63 @@ class HttpTests(unittest.IsolatedAsyncioTestCase):
                                b'rookery_hub_requests_total{method=', b'rookery_hub_request_duration_seconds_bucket'):
                     self.assertIn(family, body)
         self.assertEqual((await self.request({'op': 'list'}, app=self.internal))[0], 404)
+
+    async def test_conversations_are_private_read_only_and_keep_reply_context(self):
+        password = 'separate-viewer-password-material-1234567890'
+        hashes = self.root / 'viewer.json'
+        hashes.write_text(json.dumps({'viewer': hashlib.sha256(password.encode()).hexdigest()}))
+        hashes.chmod(0o600)
+        app = create_conversations_app(self.hub, hashes)
+        host = (b'host', b'127.0.0.1:8789')
+        credential = (b'authorization', b'Basic ' + base64.b64encode(f'viewer:{password}'.encode()))
+        path = '/api/conversations'
+        for existing in (self.app, self.internal):
+            self.assertEqual((await self.request(app=existing, path=path, method='GET'))[0], 404)
+        for visitor in ((), (credential, credential)):
+            self.assertEqual((await self.request(app=app, auth=False, path=path, method='GET',
+                                                extra_headers=(host, *visitor)))[0], 401)
+        self.assertEqual((await self.request(app=app, path=path, method='GET', extra_headers=(host,)))[0], 401)
+
+        async def viewer(path, *, method='GET', query=b''):
+            status, body = await self.request(app=app, auth=False, path=path, method=method,
+                                              extra_headers=(host, credential), query=query)
+            return status, body
+
+        self.assertEqual((await self.request(app=app, auth=False, path=path, method='GET',
+                                            extra_headers=((b'host', b'external.example'), credential)))[0], 400)
+        self.assertEqual((await viewer(path, method='POST'))[0], 405)
+        self.assertEqual((await viewer('/'))[0], 200)
+        self.assertEqual((await viewer(path, query=b'status=bogus'))[0], 400)
+        first = str(uuid.uuid4())
+        second = str(uuid.uuid4())
+        for node, provider, sid, alias in [('server', 'codex', first, 'reviewer'), ('laptop', 'claude', second, 'worker')]:
+            self.hub.call(node, 'publish', {'sessions': [{'id': sid, 'provider': provider, 'status': 'idle'}]})
+            self.hub.call(node, 'enroll', {'target': f'{node}/{provider}:{sid}', 'alias': alias})
+        sender, recipient = f'server/codex:{first}', f'laptop/claude:{second}'
+        ask_id, reply_id = str(uuid.uuid4()), str(uuid.uuid4())
+        self.hub.call('server', 'send', {'actor': sender, 'to': recipient, 'body': 'Private ask', 'id': ask_id})
+        self.hub.call('laptop', 'reply', {'actor': recipient, 'message_id': ask_id, 'body': 'Private reply', 'id': reply_id})
+        with patch('rookery.conversations.PAGE_SIZE', 1):
+            self.hub.call('server', 'send', {'actor': sender, 'to': recipient, 'body': 'Separate ask', 'id': str(uuid.uuid4())})
+            first_page = json.loads((await viewer(path))[1])
+            second_page = json.loads((await viewer(path, query=f"before={first_page['next_before']}".encode()))[1])
+            self.assertEqual([thread['id'] for thread in second_page['threads']], [ask_id])
+            self.assertIsNone(second_page['next_before'])
+        status, body = await viewer(path, query=b'host=lap&agent=Reviewer&status=pending')
+        self.assertEqual(status, 200)
+        self.assertEqual([thread['count'] for thread in json.loads(body)['threads']], [1, 2])
+        self.assertNotIn(b'Private', body)
+        self.assertEqual(json.loads((await viewer(path, query=b'agent=unknown'))[1])['threads'], [])
+
+        detail = f'{path}/{ask_id}'
+        messages = json.loads((await viewer(detail))[1])['messages']
+        self.assertEqual([message['id'] for message in messages], [ask_id, reply_id])
+        self.assertEqual(messages[1]['in_reply_to'], ask_id)
+        self.assertEqual(messages[0]['sender']['name'], 'reviewer')
+        self.assertEqual(messages[0]['body'], 'Private ask')
+        with patch('rookery.conversations.time.time', return_value=messages[1]['created'] + MESSAGE_BODY_RETENTION + 1):
+            self.assertIsNone(json.loads((await viewer(detail))[1])['messages'][0]['body'])
+        self.assertEqual((await viewer(f'{path}/{uuid.uuid4()}'))[0], 404)
 
     async def test_graph_validation_and_api_counter_exclude_diagnostics(self):
         for path in ('/graph', '/metrics', '/healthz'):

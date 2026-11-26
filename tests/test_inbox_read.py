@@ -10,7 +10,7 @@ from unittest.mock import Mock, patch
 from rookery.client import Client, configure
 from rookery.core import Error
 from rookery.daemon import Helper
-from rookery.hub import Hub, Overloaded, RETENTION
+from rookery.hub import Hub, MESSAGE_BODY_RETENTION, Overloaded
 from rookery.mcp import Server
 
 
@@ -197,7 +197,7 @@ class InboxReadTests(unittest.TestCase):
             self.send()
         with patch('rookery.hub.time.time', return_value=message['expires'] + 1):
             self.assertEqual(self.message(message['id'])['status'], 'expired')
-        with patch('rookery.hub.time.time', return_value=message['expires'] + RETENTION + 2):
+        with patch('rookery.hub.time.time', return_value=message['expires'] + MESSAGE_BODY_RETENTION + 2):
             value = self.message(message['id'])
             self.assertFalse(value['body_retained'])
             self.assertEqual(value['body'], '')

@@ -8,6 +8,7 @@ import time
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from .conversations import create_conversations_app
 from .core import Error
 from .hub import Hub, create_app
 
@@ -49,6 +50,9 @@ def add_parser(sub):
     serve.add_argument('--tokens', required=True)
     serve.add_argument('--listen', default='127.0.0.1:8787')
     serve.add_argument('--metrics-listen', default='127.0.0.1:8788')
+    serve.add_argument('--conversations-listen', help='optional HOST:PORT on loopback for the operator dashboard')
+    serve.add_argument('--conversations-password-hash-file', type=Path,
+                       help='private JSON file mapping viewer to its password hash')
     serve.add_argument('--max-bytes', type=int, default=100_000_000)
     serve.add_argument('--pending-limit', type=int, default=1000)
     serve.add_argument('--snapshot-dir')
@@ -62,6 +66,15 @@ async def serve(args):
     except ImportError:
         raise Error("hub serving requires the project's hub extra") from None
     public, internal = listener(args.listen), listener(args.metrics_listen)
+    viewer = None
+    if args.conversations_listen or args.conversations_password_hash_file:
+        if not args.conversations_listen or not args.conversations_password_hash_file:
+            raise Error('conversations listener and password hash file must be supplied together')
+        viewer = listener(args.conversations_listen)
+        if viewer[0] not in {'127.0.0.1', '::1'} or viewer[1] == 0 or viewer[1] in {public[1], internal[1]}:
+            raise Error('conversations requires a distinct port on 127.0.0.1 or ::1')
+        if not args.conversations_password_hash_file.is_file():
+            raise Error('private conversations password hash file is required')
     if public == internal or args.snapshot_interval < 1 or not 1 <= args.snapshot_keep <= 3:
         raise Error('listeners must differ; snapshot interval >=1 and keep=1..3')
     tokens = Path(args.tokens)
@@ -86,6 +99,11 @@ async def serve(args):
                                     workers=1, access_log=False, timeout_graceful_shutdown=15,
                                     server_header=False, proxy_headers=False))
                for (host, port), private in ((public, False), (internal, True))]
+    if viewer:
+        servers.append(Server(uvicorn.Config(create_conversations_app(hub, args.conversations_password_hash_file),
+                                              host=viewer[0], port=viewer[1], workers=1, access_log=False,
+                                              timeout_graceful_shutdown=15, server_header=False,
+                                              proxy_headers=False, lifespan='off', ws='none')))
     loop = asyncio.get_running_loop()
     def stop():
         for server in servers:

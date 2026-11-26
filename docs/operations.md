@@ -717,7 +717,7 @@ and restrict that port with a host firewall to the scraper's address.
 reserve of 16 MiB or a fifth of the budget, whichever is smaller. A recipient
 node with `--pending-limit` open messages refuses more, with the same retryable
 429. Message bodies
-are cleared seven days after a message reaches a final state, and the sync event
+are cleared 30 days after a message reaches a final state, and the sync event
 log keeps seven days. Budget disk for the database, its WAL (usually small after
 checkpoints, but it can grow while a long read is open) and up to three snapshots, each about the
 database's size. A volume size is not necessarily a quota: monitor actual free
@@ -819,6 +819,38 @@ server-side. Queries cover at most seven days, at most 10,000 newest messages,
 reported. It is diagnostic and never changes delivery state.
 
 A healthy hub does not prove that a recipient is loaded or eligible for input.
+
+### Conversations dashboard
+
+The optional dashboard shows hub-wide message threads and delivery states. It
+shows a placeholder for bodies already cleared by retention. Older sessions
+whose directory records have expired appear under their session IDs.
+
+Create a separate viewer password and store its hash in a private file. Keep
+the printed password in a password manager.
+
+```sh
+umask 077
+python3 -c 'import hashlib,json,secrets; p=secrets.token_urlsafe(32); print(p); open("viewer.json","x").write(json.dumps({"viewer":hashlib.sha256(p.encode()).hexdigest()}))'
+```
+
+Add both flags to the hub's existing `rookery hub serve` command:
+
+```sh
+--conversations-listen 127.0.0.1:8789 --conversations-password-hash-file /path/to/viewer.json
+```
+
+Use an SSH local forward or a Kubernetes pod port-forward to reach the
+loopback listener from your browser. For example, if the Deployment is named
+`rookery-hub` in the `rookery` namespace:
+
+```sh
+kubectl -n rookery port-forward deployment/rookery-hub 8789:8789
+```
+
+Open `http://127.0.0.1:8789/` and sign in as `viewer` with the generated password.
+Keep this listener off ingress and Services. It serves message contents to the
+viewer credential, independently of node credentials and monitoring access.
 
 ## Message safety and recovery
 

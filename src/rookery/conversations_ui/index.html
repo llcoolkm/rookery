@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Conversations · Rookery</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <span class="brand">Rookery hub</span>
+    <h1>Conversations</h1>
+    <button type="button" id="refresh" class="button">Refresh</button>
+  </header>
+
+  <main class="workspace">
+    <aside class="threads" aria-labelledby="threads-title">
+      <div class="threads-header">
+        <h2 id="threads-title">Threads</h2>
+        <form id="filters" class="filters" role="search" aria-label="Filter threads">
+          <label>Host <input name="host" type="text" maxlength="128" autocomplete="off" spellcheck="false"></label>
+          <label>Agent <input name="agent" type="text" maxlength="128" autocomplete="off" spellcheck="false"></label>
+          <label>Status
+            <select name="status">
+              <option value="">All statuses</option>
+              <option value="pending">Pending</option>
+              <option value="read">Read</option>
+              <option value="dispatching">Dispatching</option>
+              <option value="submitted">Submitted</option>
+              <option value="uncertain">Uncertain</option>
+              <option value="failed">Failed</option>
+              <option value="acknowledged">Acknowledged</option>
+              <option value="replied">Replied</option>
+              <option value="expired">Expired</option>
+              <option value="cancelled">Cancelled</option>
+            </select>
+          </label>
+          <button type="submit" class="button apply">Apply filters</button>
+        </form>
+      </div>
+      <div class="thread-scroll">
+        <p id="list-feedback" class="feedback" role="status">Loading threads…</p>
+        <ul id="thread-list" class="thread-list"></ul>
+        <button type="button" id="load-older" class="button load-older" hidden>Load older threads</button>
+      </div>
+    </aside>
+
+    <section class="transcript" aria-labelledby="transcript-title">
+      <div class="transcript-header">
+        <button type="button" id="back" class="button back">Back to threads</button>
+        <h2 id="transcript-title" tabindex="-1">Transcript</h2>
+        <p id="participants" class="participants" hidden></p>
+      </div>
+      <div id="transcript-scroll" class="transcript-scroll">
+        <p id="transcript-feedback" class="feedback" role="status">Select a thread to read its messages.</p>
+        <ol id="messages" class="messages"></ol>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

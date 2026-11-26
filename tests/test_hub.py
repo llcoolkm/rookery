@@ -396,13 +396,18 @@ class HubTests(unittest.TestCase):
 
     def test_terminal_body_retention_redacts_requests_and_events_and_keeps_binding(self):
         message = self.send(_request_id=uid())
-        self.hub.call('laptop', 'ack', {'actor': self.bk, 'message_id': message['id']})
-        with patch('rookery.hub.time.time', return_value=time.time() + RETENTION + 1):
+        now = time.time()
+        with patch('rookery.hub.time.time', return_value=now):
+            self.hub.call('laptop', 'ack', {'actor': self.bk, 'message_id': message['id']})
+        with patch('rookery.hub.time.time', return_value=now + 8 * 86400):
+            reset = self.hub.call('server', 'sync', {'cursor': 0})
+            self.assertTrue(reset['reset_required'])
+        with patch('rookery.hub.time.time', return_value=now + 30 * 86400 - 1):
+            self.assertEqual(self.messages()[0]['body'], 'A summons')
+        with patch('rookery.hub.time.time', return_value=now + 30 * 86400 + 1):
             remaining = self.messages()[0]
             self.assertEqual(remaining['body'], '')
             self.assertFalse(remaining['body_retained'])
-            reset = self.hub.call('server', 'sync', {'cursor': 0})
-            self.assertTrue(reset['reset_required'])
         with closing(sqlite3.connect(self.path)) as db:
             self.assertNotIn('A summons', ''.join(row[0] for row in db.execute('SELECT result FROM requests')))
             self.assertNotIn('A summons', ''.join(row[0] for row in db.execute('SELECT data FROM events')))
