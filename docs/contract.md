@@ -111,7 +111,7 @@ universally rejected; do not invent stricter hub behavior.
 | `disable` | `target` | `{disabled:ADDRESS,alias:STRING_OR_NULL}`. Clears enrollment, preserves alias/history. Target resolved within owner node. | `src/rookery/hub.py:511` |
 | `clear-alias` | exact owned `target` | `{target:ADDRESS,cleared_alias:STRING_OR_NULL}`. Works offline/disabled; aliases are not accepted as selectors here. | `src/rookery/hub.py:500` |
 | `list` | `{}` | `{sessions:[SESSION...]}`. Own discovered sessions plus all enrolled peers, sorted node/key. Adds enrolled, online, alias; offline status unknown; enrolled rows include enrollment_current and optional delivery_blocker. Working directories are returned only for the caller's node. | `src/rookery/hub.py` |
-| `status` | `limit?`, `after?` | `{messages:[MESSAGE...],next_after:INTEGER_OR_NULL}`. Node's sent or received messages in sequence order. This differs from local CLI/MCP status(message_id). | `src/rookery/hub.py:531` |
+| `status` | `limit?`, `after?` | `{messages:[MESSAGE...],next_after:INTEGER_OR_NULL}`. Node's sent or received messages in sequence order, including retained bodies. Local CLI and MCP status instead read local helper health or a cached message. | `src/rookery/hub.py` |
 | `inbox` | `actor`, `limit?`, `after?` | Same page shape, restricted to owned recipient; does not itself mark read. | `src/rookery/hub.py:531` |
 | `bootstrap` | `limit?`, `after?`, `cursor?` | Message page plus `sessions` and `cursor`. Capture first-page high-water cursor and pass unchanged on later pages. Commit that cursor only after all pages persist. | `src/rookery/hub.py:531`, `src/rookery/daemon.py:149` |
 | `sync` | `cursor?`, `limit?`, `wait?` | `{events:[{seq,type,data}],cursor,more,reset_required}`. Events are message snapshots or directory `{changed:true}` notices. Only node audience or broadcast events. Below retention floor returns empty events, high-water cursor and reset_required true; above high water fails. With more true advance to last returned event; otherwise advance to high water. | `src/rookery/hub.py:547`, `src/rookery/hub.py:932` |
@@ -191,10 +191,16 @@ must not overwrite newer sync snapshots. (`src/rookery/daemon.py:229`,
 Maintenance expires pending/read messages whose deadline passed; submitted and
 uncertain outcomes are not retroactively expired/retried. Terminal message bodies
 are cleared after 30 days, setting `body` empty and `body_retained` false, while
-routing/ID binding remains. The `status` RPC returns retained bodies only for
-messages whose sender or recipient is on the authenticated node, across that
-node's sessions. Retained bodies in the live database and WAL count toward
-`--max-bytes` admission. Existing snapshots can hold earlier copies and require
+routing/ID binding remains. With a node token, `status` and `bootstrap` return
+retained bodies across all sessions on that node, limited to messages whose
+sender or recipient is on the node. `inbox` scopes results to the owned
+recipient session. `claim` returns the body of an eligible pending message on
+the recipient node and moves it to dispatching. Eligibility requires the
+recipient session to be live, enrolled, eligible for push by its published
+admission policy, and using the enrolled PID when pinned. `sync` returns
+message snapshots to their node audience during the event window.
+Retained bodies in the live database and WAL count toward `--max-bytes`
+admission. Existing snapshots can hold earlier copies and require
 separate disk space. Events and request caches have seven-day retention;
 enrollment and aliases are never pruned as stale. Local Python pruning removes
 old submitted/acknowledged/replied/expired/cancelled/failed messages after seven

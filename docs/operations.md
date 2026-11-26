@@ -718,10 +718,17 @@ reserve of 16 MiB or a fifth of the budget, whichever is smaller. A recipient
 node with `--pending-limit` open messages refuses more, with the same retryable
 429.
 
-The hub clears terminal message bodies after 30 days. While a body is retained,
-a node token can read it through the `status` RPC if the sender or recipient is
-on that node. That access covers all sessions on the authenticated node. The
-sync event log keeps seven days.
+The hub clears terminal message bodies after 30 days. A node token can read
+retained bodies through `status` and `bootstrap` for messages sent or received
+by any session on its node. The `inbox` RPC limits results to an owned recipient
+session. The `claim` RPC returns a body only for a pending message eligible for
+delivery on the authenticated recipient node and records the dispatch claim.
+The `sync` RPC carries node-scoped message events for seven days.
+
+The hub's `status` RPC differs from local status. `rookery status` reports
+helper health, and `rookery status MESSAGE_ID` reads a locally cached message.
+MCP message status omits the body by default and includes it in verbose mode
+if it is available to the bound session.
 
 Retained bodies take space in the database and WAL, both of which count toward
 `--max-bytes` admission. Existing hub snapshots may contain bodies retained at
@@ -854,31 +861,51 @@ kubectl -n rookery create secret generic rookery-hub-viewer \
   --from-file=viewer.json=./viewer.json
 ```
 
-Append the viewer flags, mount, and volume below to the existing
-`rookery-hub` Deployment. The standard manifest uses `fsGroup: 10001` for
-access to the read-only projected Secret. Keep `readOnlyRootFilesystem: true`.
+Use a hub image that supports the Conversations flags. Add this JSON 6902
+patch to your copy of
+[`deploy/kubernetes/kustomization.yaml`](../deploy/kubernetes/kustomization.yaml).
+If it already has a `patches` list, append the entry to that list. The patch
+checks the hub container and its read-only root filesystem, then appends
+the two arguments, the mount, and the volume. The standard pod's
+`fsGroup: 10001` gives the hub read access to the Secret.
 
 ```yaml
-spec:
-  template:
-    spec:
-      containers:
-        - name: hub
-          args:
-            - --conversations-listen=127.0.0.1:8789
-            - --conversations-password-hash-file=/etc/rookery-viewer/viewer.json
-          securityContext:
-            readOnlyRootFilesystem: true
-          volumeMounts:
-            - name: viewer
-              mountPath: /etc/rookery-viewer
-              readOnly: true
-      volumes:
-        - name: viewer
+patches:
+  - target:
+      group: apps
+      version: v1
+      kind: Deployment
+      name: rookery-hub
+    patch: |-
+      - op: test
+        path: /spec/template/spec/containers/0/name
+        value: hub
+      - op: test
+        path: /spec/template/spec/containers/0/securityContext/readOnlyRootFilesystem
+        value: true
+      - op: add
+        path: /spec/template/spec/containers/0/args/-
+        value: --conversations-listen=127.0.0.1:8789
+      - op: add
+        path: /spec/template/spec/containers/0/args/-
+        value: --conversations-password-hash-file=/etc/rookery-viewer/viewer.json
+      - op: add
+        path: /spec/template/spec/containers/0/volumeMounts/-
+        value:
+          name: viewer
+          mountPath: /etc/rookery-viewer
+          readOnly: true
+      - op: add
+        path: /spec/template/spec/volumes/-
+        value:
+          name: viewer
           secret:
             secretName: rookery-hub-viewer
             defaultMode: 0440
 ```
+
+Run `kubectl kustomize deploy/kubernetes` to inspect the rendered Deployment
+before applying it.
 
 Use an SSH local forward or a Kubernetes pod port-forward to reach the
 loopback listener from your browser. Bind the local end to loopback. Never
@@ -888,10 +915,12 @@ use `--address 0.0.0.0` with port-forward. For the standard Deployment:
 kubectl -n rookery port-forward --address 127.0.0.1 deployment/rookery-hub 8789:8789
 ```
 
-Open `http://127.0.0.1:8789/` and sign in as `viewer` using only the generated
-token printed above as the password. The hash file belongs to the hub. Keep
-this listener off ingress and Services. It serves message contents to the viewer
-credential, independently of node credentials and monitoring access.
+Type `http://127.0.0.1:8789/` in the browser address bar or open it from a
+bookmark. The dashboard rejects browser requests initiated by another site.
+Sign in as `viewer` using only the generated token printed above as the
+password. The hash file belongs to the hub. Keep this listener off ingress
+and Services. It serves message contents to the viewer credential,
+independently of node credentials and monitoring access.
 
 The **Sessions** tab refreshes every five seconds and shows live sessions on
 every node, including published sessions awaiting enrollment. Use **Show offline**
